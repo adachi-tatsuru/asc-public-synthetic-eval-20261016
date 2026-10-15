@@ -1,0 +1,1 @@
+Synthetic checkout: integer cents; price and stock are nonnegative integers; quantity is a positive integer. Reject bool and invalid values with ValueError. Pure calculations only; no I/O or mutation.

@@ -1,4 +1,4 @@
-name: Synthetic fixture
+name: Synthetic Goal
 on:
   pull_request:
 permissions:
@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Regression tests
-        run: python3 -I test_greeting.py
-      - name: Independent acceptance oracle
-        run: python3 -I -c 'import sys; sys.path.insert(0, "."); from greeting import greeting; assert greeting() == "Hello"'
+      - name: Regression and integration
+        run: python3 -m unittest discover -v
+      - name: Independent oracle
+        run: python3 -I -c 'import sys; sys.path.insert(0,"."); from checkout import quote; assert quote(125,3,5)=={"total_cents":375,"remaining_stock":2}'
