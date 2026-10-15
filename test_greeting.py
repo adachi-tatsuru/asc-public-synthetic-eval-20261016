@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import unittest
+import issue_oracle
 from greeting import greeting
 
 class GreetingTest(unittest.TestCase):
