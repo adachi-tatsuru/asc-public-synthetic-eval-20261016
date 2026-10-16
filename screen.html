@@ -75,7 +75,11 @@
 
     #tasks li:last-child { border-block-end: 1px solid var(--border); }
     #tasks a { display: block; overflow-wrap: anywhere; }
-    #detail { border: 1px solid var(--border); border-radius: 0.55rem; padding: 1rem; }
+    #detail, #summary { border: 1px solid var(--border); border-radius: 0.55rem; padding: 1rem; }
+    #summary-counts { display: grid; gap: 0.5rem; margin-block: 1rem; }
+    #summary-counts div { display: flex; justify-content: space-between; gap: 1rem; }
+    #summary-counts dt { font-weight: 650; }
+    #summary-counts dd { margin: 0; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -84,6 +88,7 @@
     <h1>Synthetic demo</h1>
     <p id="status" role="status" aria-live="polite"></p>
     <p id="error" role="alert" hidden></p>
+    <p><a id="summary-link" href="#summary" hidden>View task summary</a></p>
 
     <section id="list-view" aria-labelledby="list-heading" hidden>
       <h2 id="list-heading">Tasks</h2>
@@ -99,6 +104,16 @@
       <p id="detail-state"></p>
       <button id="toggle" type="button" hidden></button>
     </section>
+
+    <section id="summary" aria-labelledby="summary-heading" hidden>
+      <a id="summary-list" href="#list">Back to tasks</a>
+      <h2 id="summary-heading">Task summary</h2>
+      <dl id="summary-counts">
+        <div><dt>Total</dt><dd id="summary-total"></dd></div>
+        <div><dt>Completed</dt><dd id="summary-completed"></dd></div>
+        <div><dt>Pending</dt><dd id="summary-pending"></dd></div>
+      </dl>
+    </section>
   </main>
 
   <script>
@@ -113,6 +128,11 @@
       const detailName = document.querySelector("#detail-name");
       const detailState = document.querySelector("#detail-state");
       const toggle = document.querySelector("#toggle");
+      const summaryLink = document.querySelector("#summary-link");
+      const summary = document.querySelector("#summary");
+      const summaryTotal = document.querySelector("#summary-total");
+      const summaryCompleted = document.querySelector("#summary-completed");
+      const summaryPending = document.querySelector("#summary-pending");
       const status = document.querySelector("#status");
       const error = document.querySelector("#error");
 
@@ -122,6 +142,10 @@
       let pending = 0;
       let routeVersion = 0;
       let mutationInFlight = null;
+      // A reload creates a new JavaScript context and cannot await the old
+      // document's mutation promise. Keep confirming the open summary so a
+      // request that overlaps the commit is replaced by a later DB snapshot.
+      const SUMMARY_REFRESH_INTERVAL = 100;
 
       function setLoading(isStarting) {
         pending += isStarting ? 1 : -1;
@@ -137,6 +161,10 @@
       function clearError() {
         error.textContent = "";
         error.hidden = true;
+      }
+
+      function delay(milliseconds) {
+        return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
       }
 
       async function request(path, options = {}) {
@@ -195,6 +223,8 @@
       async function showList(version) {
         listView.hidden = false;
         detail.hidden = true;
+        summary.hidden = true;
+        summaryLink.hidden = false;
         currentTask = null;
         listLoaded = false;
         tasks = [];
@@ -216,6 +246,8 @@
       async function showDetail(id, version) {
         listView.hidden = true;
         detail.hidden = false;
+        summary.hidden = true;
+        summaryLink.hidden = false;
         currentTask = null;
         delete detail.dataset.taskId;
         delete detail.dataset.completed;
@@ -233,11 +265,46 @@
         }
       }
 
+      async function showSummary(version) {
+        listView.hidden = true;
+        detail.hidden = true;
+        summary.hidden = false;
+        summaryLink.hidden = true;
+        currentTask = null;
+        delete summary.dataset.total;
+        delete summary.dataset.completed;
+        delete summary.dataset.pending;
+        summaryTotal.textContent = "";
+        summaryCompleted.textContent = "";
+        summaryPending.textContent = "";
+        clearError();
+        try {
+          if (!await waitForMutation(version)) return;
+          while (version === routeVersion) {
+            const result = await request("/api/summary");
+            if (version !== routeVersion) return;
+            summary.dataset.total = String(result.total);
+            summary.dataset.completed = String(result.completed);
+            summary.dataset.pending = String(result.pending);
+            summaryTotal.textContent = String(result.total);
+            summaryCompleted.textContent = String(result.completed);
+            summaryPending.textContent = String(result.pending);
+            await delay(SUMMARY_REFRESH_INTERVAL);
+          }
+        } catch (requestError) {
+          if (version === routeVersion) showError("Could not load the task summary. Please try again.");
+        }
+      }
+
       function route() {
         const version = ++routeVersion;
         const detailMatch = /^#task\/([1-9][0-9]*)$/.exec(location.hash);
         if (detailMatch) {
           showDetail(detailMatch[1], version);
+          return;
+        }
+        if (location.hash === "#summary") {
+          showSummary(version);
           return;
         }
         if (location.hash !== "#list") {
@@ -254,6 +321,7 @@
         clearError();
         const mutation = request(`/api/tasks/${taskAtClick.id}`, {
           method: "PATCH",
+          keepalive: true,
           body: JSON.stringify({ completed: !taskAtClick.completed })
         });
         mutationInFlight = mutation;

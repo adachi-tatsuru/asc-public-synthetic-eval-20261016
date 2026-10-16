@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import selectors
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -42,7 +43,8 @@ class RunningApp:
             self.stop()
             raise RuntimeError(f"server exited before readiness: {stderr}")
         ready = json.loads(line)
-        self.base_url = f"http://127.0.0.1:{ready['port']}"
+        self.port = ready["port"]
+        self.base_url = f"http://127.0.0.1:{self.port}"
 
     def request(
         self, path: str, *, method: str = "GET", value: object | None = None, raw: bytes | None = None
@@ -172,6 +174,57 @@ class TaskApiTests(unittest.TestCase):
             (200, reset),
         )
 
+    def test_summary_tracks_actual_completion_and_only_exact_route_is_supported(self) -> None:
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 2, "completed": 0, "pending": 2}),
+        )
+        self.assertEqual(self.app.request("/api/summary/unknown")[0], 404)
+
+        self.assertEqual(
+            self.app.request("/api/tasks/1", method="PATCH", value={"completed": True})[0],
+            200,
+        )
+        status, summary = self.app.request("/api/summary")
+        self.assertEqual(status, 200)
+        self.assertEqual(summary, {"total": 2, "completed": 1, "pending": 1})
+        self.assertEqual(set(summary), {"total", "completed", "pending"})
+        self.assertEqual(summary["total"], summary["completed"] + summary["pending"])
+
+    def test_partial_patch_body_does_not_block_an_independent_request(self) -> None:
+        partial = socket.create_connection(("127.0.0.1", self.app.port), timeout=3)
+        partial.settimeout(3)
+        try:
+            partial.sendall(
+                b"PATCH /api/tasks/1 HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 18\r\n"
+                b"Connection: close\r\n"
+                b"\r\n"
+                b'{"completed":'
+            )
+
+            self.assertEqual(
+                self.app.request("/api/summary"),
+                (200, {"total": 2, "completed": 0, "pending": 2}),
+            )
+
+            partial.sendall(b"true}")
+            response = bytearray()
+            while True:
+                chunk = partial.recv(4096)
+                if not chunk:
+                    break
+                response.extend(chunk)
+            self.assertIn(b" 200 ", response.partition(b"\r\n")[0])
+            self.assertEqual(
+                self.app.request("/api/summary"),
+                (200, {"total": 2, "completed": 1, "pending": 1}),
+            )
+        finally:
+            partial.close()
+
     def test_restart_preserves_state_and_does_not_reseed(self) -> None:
         self.assertEqual(
             self.app.request("/api/tasks/2", method="PATCH", value={"completed": True})[0], 200
@@ -184,6 +237,10 @@ class TaskApiTests(unittest.TestCase):
         self.assertEqual(
             self.app.request("/api/tasks"),
             (200, [{"id": 2, "name": "Pack order", "completed": True}]),
+        )
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 1, "completed": 1, "pending": 0}),
         )
 
     def test_only_root_page_is_served(self) -> None:
@@ -202,13 +259,15 @@ class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
         wait_start = screen.index("async function waitForMutation(version)")
         list_start = screen.index("async function showList(version)")
         detail_start = screen.index("async function showDetail(id, version)")
+        summary_start = screen.index("async function showSummary(version)")
         route_start = screen.index("function route()")
         toggle_start = screen.index('toggle.addEventListener("click"')
         script_end = screen.index("window.addEventListener", toggle_start)
 
         wait_source = screen[wait_start:list_start]
         list_source = screen[list_start:detail_start]
-        detail_source = screen[detail_start:route_start]
+        detail_source = screen[detail_start:summary_start]
+        summary_source = screen[summary_start:route_start]
         toggle_source = screen[toggle_start:script_end]
 
         self.assertIn("const mutation = mutationInFlight", wait_source)
@@ -222,9 +281,14 @@ class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
             detail_source.index("request(`/api/tasks/${id}`)"),
         )
         self.assertLess(
+            summary_source.index("await waitForMutation(version)"),
+            summary_source.index('request("/api/summary")'),
+        )
+        self.assertLess(
             toggle_source.index("mutationInFlight = mutation"),
             toggle_source.index("const updated = await mutation"),
         )
+        self.assertIn("keepalive: true", toggle_source)
 
         patch_can_finish = asyncio.Event()
         calls: list[str] = []
@@ -267,6 +331,70 @@ class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(toggle_action, back_navigation)
         self.assertEqual(calls, ["PATCH /api/tasks/1", "GET /api/tasks"])
         self.assertTrue(rendered_tasks[0]["completed"])
+
+    async def test_summary_route_has_labelled_navigation_and_confirmed_counts(self) -> None:
+        screen = (ROOT / "screen.html").read_text(encoding="utf-8")
+
+        self.assertIn('<a id="summary-link" href="#summary"', screen)
+        self.assertIn('<a id="summary-list" href="#list">Back to tasks</a>', screen)
+        self.assertIn('<section id="summary" aria-labelledby="summary-heading"', screen)
+        self.assertIn("summary.dataset.total = String(result.total)", screen)
+        self.assertIn("summary.dataset.completed = String(result.completed)", screen)
+        self.assertIn("summary.dataset.pending = String(result.pending)", screen)
+        self.assertIn('summaryTotal.textContent = String(result.total)', screen)
+        self.assertIn('summaryCompleted.textContent = String(result.completed)', screen)
+        self.assertIn('summaryPending.textContent = String(result.pending)', screen)
+
+        summary_start = screen.index("async function showSummary(version)")
+        route_start = screen.index("function route()", summary_start)
+        summary_source = screen[summary_start:route_start]
+        self.assertIn("while (version === routeVersion)", summary_source)
+        self.assertLess(
+            summary_source.index('const result = await request("/api/summary")'),
+            summary_source.index("await delay(SUMMARY_REFRESH_INTERVAL)"),
+        )
+        self.assertIn("if (version !== routeVersion) return", summary_source)
+
+    async def test_reloaded_summary_refetches_after_overlapping_commit(self) -> None:
+        """A fresh document must replace a summary captured before commit."""
+        persisted_completed = 0
+        commit_finished = asyncio.Event()
+        observed: list[dict[str, int]] = []
+
+        async def summary_request() -> dict[str, int]:
+            return {
+                "total": 2,
+                "completed": persisted_completed,
+                "pending": 2 - persisted_completed,
+            }
+
+        async def finish_commit() -> None:
+            nonlocal persisted_completed
+            for _ in range(5):
+                await asyncio.sleep(0)
+            persisted_completed = 1
+            commit_finished.set()
+
+        async def refresh_while_open() -> None:
+            while not commit_finished.is_set() or observed[-1]["completed"] == 0:
+                observed.append(await summary_request())
+                await asyncio.sleep(0)
+
+        commit = asyncio.create_task(finish_commit())
+        observed.append(await summary_request())
+        refresh = asyncio.create_task(refresh_while_open())
+        await asyncio.gather(commit, refresh)
+
+        self.assertEqual(observed[0], {"total": 2, "completed": 0, "pending": 2})
+        self.assertGreaterEqual(
+            sum(result["completed"] == 0 for result in observed),
+            2,
+        )
+        self.assertEqual(observed[-1], {"total": 2, "completed": 1, "pending": 1})
+        self.assertEqual(
+            observed[-1]["total"],
+            observed[-1]["completed"] + observed[-1]["pending"],
+        )
 
 
 if __name__ == "__main__":
