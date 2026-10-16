@@ -6,10 +6,13 @@ from __future__ import annotations
 import asyncio
 import json
 import selectors
+import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -42,7 +45,8 @@ class RunningApp:
             self.stop()
             raise RuntimeError(f"server exited before readiness: {stderr}")
         ready = json.loads(line)
-        self.base_url = f"http://127.0.0.1:{ready['port']}"
+        self.port = ready["port"]
+        self.base_url = f"http://127.0.0.1:{self.port}"
 
     def request(
         self, path: str, *, method: str = "GET", value: object | None = None, raw: bytes | None = None
@@ -97,6 +101,10 @@ class TaskApiTests(unittest.TestCase):
             self.app.request("/api/tasks/1"),
             (200, {"id": 1, "name": "Review inventory", "completed": False}),
         )
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 2, "completed": 0, "pending": 2}),
+        )
         self.assertEqual(self.app.request("/api/tasks/999")[0], 404)
         self.assertEqual(
             self.app.request("/api/tasks/9223372036854775808")[0], 404
@@ -107,6 +115,79 @@ class TaskApiTests(unittest.TestCase):
                 "SELECT id, name, completed FROM tasks ORDER BY id"
             ).fetchall()
         self.assertEqual(rows, [(1, "Review inventory", 0), (2, "Pack order", 0)])
+
+    def test_summary_tracks_completion_and_survives_restart(self) -> None:
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 2, "completed": 0, "pending": 2}),
+        )
+        self.assertEqual(
+            self.app.request("/api/tasks/1", method="PATCH", value={"completed": True})[0],
+            200,
+        )
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 2, "completed": 1, "pending": 1}),
+        )
+
+        self.app.stop()
+        self.app = RunningApp(self.db_path)
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 2, "completed": 1, "pending": 1}),
+        )
+
+    def test_summary_route_is_exact(self) -> None:
+        self.assertEqual(self.app.request("/api/summary/unknown")[0], 404)
+
+    def test_slow_valid_patch_body_does_not_block_summary(self) -> None:
+        body = b'{"completed":true}'
+        request_head = (
+            "PATCH /api/tasks/1 HTTP/1.0\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "\r\n"
+        ).encode("ascii")
+
+        summary_result: list[tuple[int, object]] = []
+        summary_started = threading.Event()
+        summary_done = threading.Event()
+
+        def fetch_summary() -> None:
+            try:
+                summary_started.set()
+                summary_result.append(self.app.request("/api/summary"))
+            finally:
+                summary_done.set()
+
+        with socket.create_connection(("127.0.0.1", self.app.port), timeout=3) as stalled:
+            stalled.settimeout(3)
+            stalled.sendall(request_head + body[:1])
+            summary_thread = threading.Thread(target=fetch_summary)
+            summary_thread.start()
+            self.assertTrue(summary_started.wait(timeout=1))
+            self.assertTrue(summary_done.wait(timeout=1))
+            time.sleep(1.1)
+            stalled.sendall(body[1:])
+            response = stalled.recv(4096)
+
+        summary_thread.join(timeout=3)
+
+        self.assertFalse(summary_thread.is_alive())
+        self.assertEqual(
+            summary_result,
+            [(200, {"total": 2, "completed": 0, "pending": 2})],
+        )
+        self.assertIn(b"200 OK", response)
+        self.assertEqual(
+            self.app.request("/api/tasks/1"),
+            (200, {"id": 1, "name": "Review inventory", "completed": True}),
+        )
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 2, "completed": 1, "pending": 1}),
+        )
 
     def test_patch_is_boolean_only_idempotent_and_invalid_input_is_unchanged(self) -> None:
         expected = {"id": 1, "name": "Review inventory", "completed": True}
@@ -185,6 +266,10 @@ class TaskApiTests(unittest.TestCase):
             self.app.request("/api/tasks"),
             (200, [{"id": 2, "name": "Pack order", "completed": True}]),
         )
+        self.assertEqual(
+            self.app.request("/api/summary"),
+            (200, {"total": 1, "completed": 1, "pending": 0}),
+        )
 
     def test_only_root_page_is_served(self) -> None:
         with urllib.request.urlopen(self.app.base_url + "/", timeout=3) as response:
@@ -195,20 +280,22 @@ class TaskApiTests(unittest.TestCase):
 
 
 class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_toggle_then_back_waits_for_mutation_before_list_request(self) -> None:
-        """A delayed PATCH must settle before the Back route starts its GET."""
+    async def test_navigation_waits_for_toggle_before_destination_request(self) -> None:
+        """A delayed PATCH must settle before list or summary starts its GET."""
         screen = (ROOT / "screen.html").read_text(encoding="utf-8")
 
         wait_start = screen.index("async function waitForMutation(version)")
         list_start = screen.index("async function showList(version)")
         detail_start = screen.index("async function showDetail(id, version)")
+        summary_start = screen.index("async function showSummary(version)")
         route_start = screen.index("function route()")
         toggle_start = screen.index('toggle.addEventListener("click"')
         script_end = screen.index("window.addEventListener", toggle_start)
 
         wait_source = screen[wait_start:list_start]
         list_source = screen[list_start:detail_start]
-        detail_source = screen[detail_start:route_start]
+        detail_source = screen[detail_start:summary_start]
+        summary_source = screen[summary_start:route_start]
         toggle_source = screen[toggle_start:script_end]
 
         self.assertIn("const mutation = mutationInFlight", wait_source)
@@ -222,9 +309,14 @@ class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
             detail_source.index("request(`/api/tasks/${id}`)"),
         )
         self.assertLess(
+            summary_source.index("await waitForMutation(version)"),
+            summary_source.index('request("/api/summary")'),
+        )
+        self.assertLess(
             toggle_source.index("mutationInFlight = mutation"),
             toggle_source.index("const updated = await mutation"),
         )
+        self.assertIn("keepalive: true", toggle_source)
 
         patch_can_finish = asyncio.Event()
         calls: list[str] = []
@@ -267,6 +359,121 @@ class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(toggle_action, back_navigation)
         self.assertEqual(calls, ["PATCH /api/tasks/1", "GET /api/tasks"])
         self.assertTrue(rendered_tasks[0]["completed"])
+
+    async def test_reloaded_summary_converges_after_competing_toggle(self) -> None:
+        """A summary GET that wins the reload race must refresh after the PATCH."""
+        screen = (ROOT / "screen.html").read_text(encoding="utf-8")
+        summary_start = screen.index("async function showSummary(version)")
+        route_start = screen.index("function route()", summary_start)
+        summary_source = screen[summary_start:route_start]
+
+        self.assertIn("while (version === routeVersion)", summary_source)
+        self.assertIn('request("/api/summary")', summary_source)
+        self.assertIn("await delay(SUMMARY_REFRESH_MS)", summary_source)
+        self.assertLess(
+            summary_source.index('request("/api/summary")'),
+            summary_source.index("await delay(SUMMARY_REFRESH_MS)"),
+        )
+
+        patch_can_finish = asyncio.Event()
+        first_summary_rendered = asyncio.Event()
+        refresh_can_start = asyncio.Event()
+        persisted_completed = False
+        rendered_counts: list[dict[str, int]] = []
+
+        async def delayed_patch() -> None:
+            nonlocal persisted_completed
+            await patch_can_finish.wait()
+            persisted_completed = True
+
+        async def request_summary() -> dict[str, int]:
+            completed = int(persisted_completed)
+            return {"total": 2, "completed": completed, "pending": 2 - completed}
+
+        async def reloaded_summary() -> None:
+            rendered_counts.append(await request_summary())
+            first_summary_rendered.set()
+            await refresh_can_start.wait()
+            rendered_counts.append(await request_summary())
+
+        toggle = asyncio.create_task(delayed_patch())
+        reload = asyncio.create_task(reloaded_summary())
+        await first_summary_rendered.wait()
+        self.assertEqual(
+            rendered_counts,
+            [{"total": 2, "completed": 0, "pending": 2}],
+        )
+
+        patch_can_finish.set()
+        await toggle
+        refresh_can_start.set()
+        await reload
+
+        self.assertEqual(
+            rendered_counts[-1],
+            {"total": 2, "completed": 1, "pending": 1},
+        )
+
+    async def test_summary_success_preserves_toggle_failure_feedback(self) -> None:
+        """A summary refresh clears its own error, not a failed mutation."""
+        screen = (ROOT / "screen.html").read_text(encoding="utf-8")
+        errors_start = screen.index('const errorMessages = { view: "", mutation: "" }')
+        request_start = screen.index("async function request(path", errors_start)
+        summary_start = screen.index("async function showSummary(version)")
+        route_start = screen.index("function route()", summary_start)
+        toggle_start = screen.index('toggle.addEventListener("click"')
+        script_end = screen.index("window.addEventListener", toggle_start)
+
+        errors_source = screen[errors_start:request_start]
+        summary_source = screen[summary_start:route_start]
+        toggle_source = screen[toggle_start:script_end]
+
+        self.assertIn("errorMessages[source] = message", errors_source)
+        self.assertIn('clearError("view")', summary_source)
+        self.assertIn(
+            'showError("Could not update this task. Its state was not changed here.", "mutation")',
+            toggle_source,
+        )
+
+        errors = {"view": "", "mutation": ""}
+
+        def visible_error() -> str:
+            return " ".join(
+                message for message in (errors["mutation"], errors["view"]) if message
+            )
+
+        mutation_can_fail = asyncio.Event()
+
+        async def failed_mutation() -> None:
+            await mutation_can_fail.wait()
+            raise RuntimeError("PATCH failed")
+
+        mutation = asyncio.create_task(failed_mutation())
+
+        async def toggle_action() -> None:
+            try:
+                await mutation
+            except RuntimeError:
+                errors["mutation"] = "Could not update this task."
+
+        async def summary_action() -> None:
+            errors["view"] = ""
+            try:
+                await mutation
+            except RuntimeError:
+                pass
+            errors["view"] = ""
+
+        toggle = asyncio.create_task(toggle_action())
+        summary = asyncio.create_task(summary_action())
+        mutation_can_fail.set()
+        await asyncio.gather(toggle, summary)
+        self.assertEqual(visible_error(), "Could not update this task.")
+
+        errors["view"] = "Could not load the task summary."
+        self.assertIn("Could not load the task summary.", visible_error())
+        errors["view"] = ""
+        self.assertEqual(visible_error(), "Could not update this task.")
 
 
 if __name__ == "__main__":

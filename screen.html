@@ -75,13 +75,23 @@
 
     #tasks li:last-child { border-block-end: 1px solid var(--border); }
     #tasks a { display: block; overflow-wrap: anywhere; }
-    #detail { border: 1px solid var(--border); border-radius: 0.55rem; padding: 1rem; }
+    nav { margin-block-end: 1rem; }
+    #detail, #summary {
+      border: 1px solid var(--border);
+      border-radius: 0.55rem;
+      padding: 1rem;
+    }
+    .summary-counts { display: grid; gap: 0.75rem; margin-block: 1rem; }
+    .summary-counts p { margin: 0; }
     [hidden] { display: none !important; }
   </style>
 </head>
 <body>
   <main>
     <h1>Synthetic demo</h1>
+    <nav aria-label="Task views">
+      <a id="summary-link" href="#summary">View task summary</a>
+    </nav>
     <p id="status" role="status" aria-live="polite"></p>
     <p id="error" role="alert" hidden></p>
 
@@ -99,6 +109,16 @@
       <p id="detail-state"></p>
       <button id="toggle" type="button" hidden></button>
     </section>
+
+    <section id="summary" aria-labelledby="summary-heading" hidden>
+      <h2 id="summary-heading">Task summary</h2>
+      <div class="summary-counts">
+        <p>Total: <strong id="summary-total"></strong></p>
+        <p>Completed: <strong id="summary-completed"></strong></p>
+        <p>Pending: <strong id="summary-pending"></strong></p>
+      </div>
+      <a id="summary-list" href="#list">Back to tasks</a>
+    </section>
   </main>
 
   <script>
@@ -113,6 +133,10 @@
       const detailName = document.querySelector("#detail-name");
       const detailState = document.querySelector("#detail-state");
       const toggle = document.querySelector("#toggle");
+      const summary = document.querySelector("#summary");
+      const summaryTotal = document.querySelector("#summary-total");
+      const summaryCompleted = document.querySelector("#summary-completed");
+      const summaryPending = document.querySelector("#summary-pending");
       const status = document.querySelector("#status");
       const error = document.querySelector("#error");
 
@@ -122,6 +146,8 @@
       let pending = 0;
       let routeVersion = 0;
       let mutationInFlight = null;
+      const errorMessages = { view: "", mutation: "" };
+      const SUMMARY_REFRESH_MS = 1000;
 
       function setLoading(isStarting) {
         pending += isStarting ? 1 : -1;
@@ -129,14 +155,29 @@
         status.textContent = pending > 0 ? "Loading" : "";
       }
 
-      function showError(message) {
-        error.textContent = message;
-        error.hidden = false;
+      function renderErrors() {
+        const messages = [errorMessages.mutation, errorMessages.view].filter(Boolean);
+        error.textContent = messages.join(" ");
+        error.hidden = messages.length === 0;
       }
 
-      function clearError() {
-        error.textContent = "";
-        error.hidden = true;
+      function showError(message, source = "view") {
+        errorMessages[source] = message;
+        renderErrors();
+      }
+
+      function clearError(source) {
+        if (source) {
+          errorMessages[source] = "";
+        } else {
+          errorMessages.view = "";
+          errorMessages.mutation = "";
+        }
+        renderErrors();
+      }
+
+      function delay(milliseconds) {
+        return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
       }
 
       async function request(path, options = {}) {
@@ -192,9 +233,19 @@
         toggle.disabled = false;
       }
 
+      function renderSummary(counts) {
+        summary.dataset.total = String(counts.total);
+        summary.dataset.completed = String(counts.completed);
+        summary.dataset.pending = String(counts.pending);
+        summaryTotal.textContent = String(counts.total);
+        summaryCompleted.textContent = String(counts.completed);
+        summaryPending.textContent = String(counts.pending);
+      }
+
       async function showList(version) {
         listView.hidden = false;
         detail.hidden = true;
+        summary.hidden = true;
         currentTask = null;
         listLoaded = false;
         tasks = [];
@@ -216,6 +267,7 @@
       async function showDetail(id, version) {
         listView.hidden = true;
         detail.hidden = false;
+        summary.hidden = true;
         currentTask = null;
         delete detail.dataset.taskId;
         delete detail.dataset.completed;
@@ -233,8 +285,38 @@
         }
       }
 
+      async function showSummary(version) {
+        listView.hidden = true;
+        detail.hidden = true;
+        summary.hidden = false;
+        currentTask = null;
+        delete summary.dataset.total;
+        delete summary.dataset.completed;
+        delete summary.dataset.pending;
+        summaryTotal.textContent = "";
+        summaryCompleted.textContent = "";
+        summaryPending.textContent = "";
+        clearError("view");
+        if (!await waitForMutation(version)) return;
+        while (version === routeVersion) {
+          try {
+            const counts = await request("/api/summary");
+            if (version !== routeVersion) return;
+            renderSummary(counts);
+            clearError("view");
+          } catch (requestError) {
+            if (version === routeVersion) showError("Could not load the task summary. Please try again.");
+          }
+          if (version === routeVersion) await delay(SUMMARY_REFRESH_MS);
+        }
+      }
+
       function route() {
         const version = ++routeVersion;
+        if (location.hash === "#summary") {
+          showSummary(version);
+          return;
+        }
         const detailMatch = /^#task\/([1-9][0-9]*)$/.exec(location.hash);
         if (detailMatch) {
           showDetail(detailMatch[1], version);
@@ -254,6 +336,7 @@
         clearError();
         const mutation = request(`/api/tasks/${taskAtClick.id}`, {
           method: "PATCH",
+          keepalive: true,
           body: JSON.stringify({ completed: !taskAtClick.completed })
         });
         mutationInFlight = mutation;
@@ -262,7 +345,7 @@
           if (currentTask && currentTask.id === updated.id) renderDetail(updated);
         } catch (requestError) {
           if (currentTask && currentTask.id === taskAtClick.id) toggle.disabled = false;
-          showError("Could not update this task. Its state was not changed here.");
+          showError("Could not update this task. Its state was not changed here.", "mutation");
         } finally {
           if (mutationInFlight === mutation) mutationInFlight = null;
         }

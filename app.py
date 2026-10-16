@@ -8,6 +8,7 @@ import json
 import re
 import sqlite3
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,7 @@ class TaskServer(ThreadingHTTPServer):
     ) -> None:
         self.db_path = db_path
         self.screen = screen
+        self.database_lock = threading.Lock()
         super().__init__(server_address, handler_class)
 
 
@@ -86,11 +88,26 @@ class TaskHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/tasks":
-            with self._connection() as connection:
+            with self.server.database_lock, self._connection() as connection:
                 rows = connection.execute(
                     "SELECT id, name, completed FROM tasks ORDER BY id"
                 ).fetchall()
             self._send_json(200, [task_object(row) for row in rows])
+            return
+
+        if self.path == "/api/summary":
+            with self.server.database_lock, self._connection() as connection:
+                total, completed = connection.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(completed), 0) FROM tasks"
+                ).fetchone()
+            self._send_json(
+                200,
+                {
+                    "total": total,
+                    "completed": completed,
+                    "pending": total - completed,
+                },
+            )
             return
 
         match = TASK_PATH.fullmatch(self.path)
@@ -99,7 +116,7 @@ class TaskHandler(BaseHTTPRequestHandler):
             if task_id is None:
                 self._send_error_json(404, "Task not found")
                 return
-            with self._connection() as connection:
+            with self.server.database_lock, self._connection() as connection:
                 row = connection.execute(
                     "SELECT id, name, completed FROM tasks WHERE id = ?",
                     (task_id,),
@@ -136,19 +153,24 @@ class TaskHandler(BaseHTTPRequestHandler):
             self._send_error_json(400, "Expected exactly one boolean completed field")
             return
 
-        completed = int(payload["completed"])
-        with self._connection() as connection:
-            update = connection.execute(
-                "UPDATE tasks SET completed = ? WHERE id = ?",
-                (completed, task_id),
-            )
-            if update.rowcount == 0:
-                self._send_error_json(404, "Task not found")
-                return
-            updated = connection.execute(
-                "SELECT id, name, completed FROM tasks WHERE id = ?",
-                (task_id,),
-            ).fetchone()
+        with self.server.database_lock:
+            completed = int(payload["completed"])
+            with self._connection() as connection:
+                update = connection.execute(
+                    "UPDATE tasks SET completed = ? WHERE id = ?",
+                    (completed, task_id),
+                )
+                if update.rowcount == 0:
+                    updated = None
+                else:
+                    updated = connection.execute(
+                        "SELECT id, name, completed FROM tasks WHERE id = ?",
+                        (task_id,),
+                    ).fetchone()
+
+        if updated is None:
+            self._send_error_json(404, "Task not found")
+            return
 
         self._send_json(200, task_object(updated))
 
