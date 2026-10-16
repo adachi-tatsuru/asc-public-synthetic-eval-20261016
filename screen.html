@@ -220,6 +220,24 @@
         toggle.disabled = false;
       }
 
+      function clearSummaryCounts() {
+        delete summary.dataset.total;
+        delete summary.dataset.completed;
+        delete summary.dataset.pending;
+        summaryTotal.textContent = "";
+        summaryCompleted.textContent = "";
+        summaryPending.textContent = "";
+      }
+
+      function renderSummary(result) {
+        summary.dataset.total = String(result.total);
+        summary.dataset.completed = String(result.completed);
+        summary.dataset.pending = String(result.pending);
+        summaryTotal.textContent = String(result.total);
+        summaryCompleted.textContent = String(result.completed);
+        summaryPending.textContent = String(result.pending);
+      }
+
       async function showList(version) {
         listView.hidden = false;
         detail.hidden = true;
@@ -271,28 +289,21 @@
         summary.hidden = false;
         summaryLink.hidden = true;
         currentTask = null;
-        delete summary.dataset.total;
-        delete summary.dataset.completed;
-        delete summary.dataset.pending;
-        summaryTotal.textContent = "";
-        summaryCompleted.textContent = "";
-        summaryPending.textContent = "";
+        clearSummaryCounts();
         clearError();
-        try {
-          if (!await waitForMutation(version)) return;
-          while (version === routeVersion) {
+        if (!await waitForMutation(version)) return;
+        while (version === routeVersion) {
+          try {
             const result = await request("/api/summary");
             if (version !== routeVersion) return;
-            summary.dataset.total = String(result.total);
-            summary.dataset.completed = String(result.completed);
-            summary.dataset.pending = String(result.pending);
-            summaryTotal.textContent = String(result.total);
-            summaryCompleted.textContent = String(result.completed);
-            summaryPending.textContent = String(result.pending);
-            await delay(SUMMARY_REFRESH_INTERVAL);
+            renderSummary(result);
+            clearError();
+          } catch (requestError) {
+            if (version !== routeVersion) return;
+            clearSummaryCounts();
+            showError("Could not load the task summary. Please try again.");
           }
-        } catch (requestError) {
-          if (version === routeVersion) showError("Could not load the task summary. Please try again.");
+          await delay(SUMMARY_REFRESH_INTERVAL);
         }
       }
 

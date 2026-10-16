@@ -349,8 +349,14 @@ class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
         route_start = screen.index("function route()", summary_start)
         summary_source = screen[summary_start:route_start]
         self.assertIn("while (version === routeVersion)", summary_source)
+        self.assertIn("catch (requestError)", summary_source)
+        self.assertIn("clearSummaryCounts();", summary_source)
         self.assertLess(
             summary_source.index('const result = await request("/api/summary")'),
+            summary_source.index("catch (requestError)"),
+        )
+        self.assertLess(
+            summary_source.index("catch (requestError)"),
             summary_source.index("await delay(SUMMARY_REFRESH_INTERVAL)"),
         )
         self.assertIn("if (version !== routeVersion) return", summary_source)
@@ -395,6 +401,48 @@ class ScreenBehaviorTests(unittest.IsolatedAsyncioTestCase):
             observed[-1]["total"],
             observed[-1]["completed"] + observed[-1]["pending"],
         )
+
+    async def test_summary_refresh_hides_stale_counts_after_failure_and_recovers(self) -> None:
+        """A failed post-commit confirmation cannot leave its old snapshot presented."""
+        persisted_completed = 0
+        responses: list[dict[str, int] | RuntimeError] = []
+        presented: dict[str, int] | None = None
+        error_visible = False
+
+        async def summary_request() -> dict[str, int]:
+            response = responses.pop(0)
+            if isinstance(response, RuntimeError):
+                raise response
+            return response
+
+        async def refresh_once() -> None:
+            nonlocal presented, error_visible
+            try:
+                presented = await summary_request()
+                error_visible = False
+            except RuntimeError:
+                presented = None
+                error_visible = True
+
+        responses.append(
+            {"total": 2, "completed": persisted_completed, "pending": 2 - persisted_completed}
+        )
+        await refresh_once()
+        self.assertEqual(presented, {"total": 2, "completed": 0, "pending": 2})
+        self.assertFalse(error_visible)
+
+        persisted_completed = 1
+        responses.append(RuntimeError("transient summary failure"))
+        await refresh_once()
+        self.assertIsNone(presented)
+        self.assertTrue(error_visible)
+
+        responses.append(
+            {"total": 2, "completed": persisted_completed, "pending": 2 - persisted_completed}
+        )
+        await refresh_once()
+        self.assertEqual(presented, {"total": 2, "completed": 1, "pending": 1})
+        self.assertFalse(error_visible)
 
 
 if __name__ == "__main__":
