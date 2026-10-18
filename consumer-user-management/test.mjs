@@ -5,7 +5,7 @@ import {once} from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-test('synthetic API acceptance: persistence, validation and authorization',async()=>{
+test('synthetic API acceptance: mutations, validation and authorization',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'synthetic-users-'));
  const server=spawn(process.execPath,[new URL('./server.mjs',import.meta.url).pathname],{env:{...process.env,DATA_FILE:path.join(dir,'users.sqlite')},stdio:['ignore','pipe','inherit']});
  try{

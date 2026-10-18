@@ -1,4 +1,4 @@
-name: Synthetic consumer journey
+name: Synthetic consumer API checks
 on:
   pull_request:
 permissions:
