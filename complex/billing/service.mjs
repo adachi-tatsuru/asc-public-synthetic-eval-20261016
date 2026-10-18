@@ -22,7 +22,9 @@ function isRecord(value) {
 
 function hasExactKeys(value, keys) {
   if (!isRecord(value)) return false;
-  const actual = Object.keys(value).sort();
+  const actual = Reflect.ownKeys(value);
+  if (actual.some((key) => typeof key !== 'string')) return false;
+  actual.sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
