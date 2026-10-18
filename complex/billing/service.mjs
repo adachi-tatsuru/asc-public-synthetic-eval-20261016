@@ -160,12 +160,13 @@ export class BillingService {
 
     const event = input.event;
     if (
-      !hasExactKeys(event, ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version']) ||
+      !hasExactKeys(event, ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'currency', 'status', 'version']) ||
       !isNonemptyString(event.id) ||
       !isNonemptyString(event.tenant) ||
       !isNonemptyString(event.sku) ||
       !isSafeIntegerAtLeast(event.quantity, 1) ||
       !isSafeIntegerAtLeast(event.amountCents, 0) ||
+      event.currency !== 'JPY' ||
       event.status !== 'reserved' ||
       !isSafeIntegerAtLeast(event.version, 1)
     ) {

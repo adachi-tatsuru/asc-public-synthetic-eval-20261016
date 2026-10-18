@@ -42,8 +42,20 @@ const publicReservation = row => Object.freeze({
   sku: row.sku,
   quantity: row.quantity,
   amountCents: row.amount_cents,
+  currency: 'JPY',
   status: row.status,
   version: row.version,
+});
+
+const publicReplayReservation = result => Object.freeze({
+  id: result.id,
+  tenant: result.tenant,
+  sku: result.sku,
+  quantity: result.quantity,
+  amountCents: result.amountCents,
+  currency: 'JPY',
+  status: result.status,
+  version: result.version,
 });
 
 export class ReservationService {
@@ -106,7 +118,7 @@ export class ReservationService {
     `).get(tenant, operation, key);
     if (!row) return undefined;
     if (row.input !== input) fail('CONFLICT', 'Idempotency key was used with different input');
-    return Object.freeze(JSON.parse(row.result));
+    return publicReplayReservation(JSON.parse(row.result));
   }
 
   #record(tenant, operation, key, input, result) {
@@ -163,6 +175,7 @@ export class ReservationService {
         sku,
         quantity,
         amountCents,
+        currency: 'JPY',
         status: 'reserved',
         version: 1,
       });
