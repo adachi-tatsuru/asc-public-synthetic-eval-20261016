@@ -26,7 +26,7 @@ const isSafeIntegerAtLeast = (value, minimum) => Number.isSafeInteger(value) && 
 
 const checkActor = (actor, mutate = false) => {
   if (
-    actor === null || typeof actor !== 'object' || Array.isArray(actor) ||
+    !hasExactKeys(actor, ['tenant', 'role']) ||
     !isNonemptyString(actor.tenant) || (actor.role !== 'admin' && actor.role !== 'reader')
   ) fail('AUTH', 'Invalid actor');
   if (mutate && actor.role !== 'admin') fail('FORBIDDEN', 'Mutation is not permitted');
