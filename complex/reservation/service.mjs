@@ -44,6 +44,7 @@ const publicReservation = row => Object.freeze({
   amountCents: row.amount_cents,
   status: row.status,
   version: row.version,
+  currency: 'JPY',
 });
 
 export class ReservationService {
@@ -106,7 +107,7 @@ export class ReservationService {
     `).get(tenant, operation, key);
     if (!row) return undefined;
     if (row.input !== input) fail('CONFLICT', 'Idempotency key was used with different input');
-    return Object.freeze(JSON.parse(row.result));
+    return Object.freeze({...JSON.parse(row.result), currency: 'JPY'});
   }
 
   #record(tenant, operation, key, input, result) {
@@ -165,6 +166,7 @@ export class ReservationService {
         amountCents,
         status: 'reserved',
         version: 1,
+        currency: 'JPY',
       });
       this.#db.prepare(`
         UPDATE reservation_inventory SET available = available - ?

@@ -82,8 +82,8 @@ function invoiceFromRow(row) {
   };
 }
 
-function parseReplay(row, canonicalInput) {
-  if (row.input_json !== canonicalInput) {
+function parseReplay(row, canonicalInput, legacyCanonicalInput) {
+  if (row.input_json !== canonicalInput && row.input_json !== legacyCanonicalInput) {
     throw failure('CONFLICT', 'Idempotency key was already used for different input');
   }
   return JSON.parse(row.result_json);
@@ -134,13 +134,13 @@ export class BillingService {
     }
   }
 
-  #replay(tenant, operation, key, canonicalInput) {
+  #replay(tenant, operation, key, canonicalInput, legacyCanonicalInput) {
     const row = this.#database.prepare(`
       SELECT input_json, result_json
       FROM billing_idempotency
       WHERE tenant = ? AND operation = ? AND idempotency_key = ?
     `).get(tenant, operation, key);
-    return row === undefined ? undefined : parseReplay(row, canonicalInput);
+    return row === undefined ? undefined : parseReplay(row, canonicalInput, legacyCanonicalInput);
   }
 
   #record(tenant, operation, key, canonicalInput, result) {
@@ -160,14 +160,15 @@ export class BillingService {
 
     const event = input.event;
     if (
-      !hasExactKeys(event, ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version']) ||
+      !hasExactKeys(event, ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency']) ||
       !isNonemptyString(event.id) ||
       !isNonemptyString(event.tenant) ||
       !isNonemptyString(event.sku) ||
       !isSafeIntegerAtLeast(event.quantity, 1) ||
       !isSafeIntegerAtLeast(event.amountCents, 0) ||
       event.status !== 'reserved' ||
-      !isSafeIntegerAtLeast(event.version, 1)
+      !isSafeIntegerAtLeast(event.version, 1) ||
+      event.currency !== 'JPY'
     ) {
       throw failure('VALIDATION', 'Invalid reservation event');
     }
@@ -184,11 +185,23 @@ export class BillingService {
         amountCents: event.amountCents,
         status: event.status,
         version: event.version,
+        currency: event.currency,
+      },
+    });
+    const legacyCanonicalInput = JSON.stringify({
+      event: {
+        id: event.id,
+        tenant: event.tenant,
+        sku: event.sku,
+        quantity: event.quantity,
+        amountCents: event.amountCents,
+        status: event.status,
+        version: event.version,
       },
     });
 
     return this.#transaction(() => {
-      const replay = this.#replay(actor.tenant, 'issue', input.key, canonicalInput);
+      const replay = this.#replay(actor.tenant, 'issue', input.key, canonicalInput, legacyCanonicalInput);
       if (replay !== undefined) return replay;
 
       const duplicate = this.#database.prepare(`
