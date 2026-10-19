@@ -74,7 +74,12 @@ export class BillingService {
 
   #checkActor(actor) {
     if (!isPlainRecord(actor)) fail('AUTH', 'invalid actor');
-    const {tenant, role} = actor;
+    let tenant, role;
+    try {
+      ({tenant, role} = actor);
+    } catch {
+      fail('AUTH', 'invalid actor');
+    }
     if (!isNonEmptyString(tenant)) fail('AUTH', 'invalid tenant');
     if (role !== 'admin' && role !== 'reader') fail('AUTH', 'invalid role');
     return {tenant, role};
@@ -115,22 +120,32 @@ export class BillingService {
     const writer = this.#checkWriter(actor);
 
     if (!hasExactOwnKeys(input, ['key', 'event'])) fail('VALIDATION', 'invalid issue input');
-    const {key, event} = input;
+    let key, event;
+    try {
+      ({key, event} = input);
+    } catch {
+      fail('VALIDATION', 'invalid issue input');
+    }
     if (!isNonEmptyString(key)) fail('VALIDATION', 'invalid idempotency key');
     if (!isPlainRecord(event)) fail('VALIDATION', 'invalid event');
     if (!hasExactOwnKeys(event, EVENT_KEYS)) fail('VALIDATION', 'invalid event shape');
 
     // Read each property exactly once; validate and persist the same local values.
-    const {
-      id: reservationId,
-      tenant: eventTenant,
-      sku,
-      quantity,
-      amountCents,
-      status,
-      version,
-      currency,
-    } = event;
+    let reservationId, eventTenant, sku, quantity, amountCents, status, version, currency;
+    try {
+      ({
+        id: reservationId,
+        tenant: eventTenant,
+        sku,
+        quantity,
+        amountCents,
+        status,
+        version,
+        currency,
+      } = event);
+    } catch {
+      fail('VALIDATION', 'invalid event shape');
+    }
 
     if (!isNonEmptyString(reservationId)) fail('VALIDATION', 'invalid event id');
     if (!isNonEmptyString(eventTenant)) fail('VALIDATION', 'invalid event tenant');
@@ -188,7 +203,12 @@ export class BillingService {
     const writer = this.#checkWriter(actor);
 
     if (!hasExactOwnKeys(input, ['key', 'id', 'expectedVersion'])) fail('VALIDATION', `invalid ${operation} input`);
-    const {key, id, expectedVersion} = input;
+    let key, id, expectedVersion;
+    try {
+      ({key, id, expectedVersion} = input);
+    } catch {
+      fail('VALIDATION', `invalid ${operation} input`);
+    }
     if (!isNonEmptyString(key)) fail('VALIDATION', 'invalid idempotency key');
     if (!isNonEmptyString(id)) fail('VALIDATION', 'invalid id');
     if (!isSafeInt(expectedVersion) || expectedVersion < 1) fail('VALIDATION', 'invalid expectedVersion');
@@ -248,7 +268,12 @@ export class BillingService {
   list(actor, input) {
     const reader = this.#checkActor(actor);
     if (!hasExactOwnKeys(input, ['page', 'pageSize'])) fail('VALIDATION', 'invalid list input');
-    const {page, pageSize} = input;
+    let page, pageSize;
+    try {
+      ({page, pageSize} = input);
+    } catch {
+      fail('VALIDATION', 'invalid list input');
+    }
     if (!isSafeInt(page) || page < 1) fail('VALIDATION', 'invalid page');
     if (!isSafeInt(pageSize) || pageSize < 1 || pageSize > 50) fail('VALIDATION', 'invalid pageSize');
 

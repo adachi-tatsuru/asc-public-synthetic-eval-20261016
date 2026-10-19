@@ -33,7 +33,12 @@ function requireShape(input, fields) {
     if (!Object.prototype.hasOwnProperty.call(input, name)) {
       throw makeError('VALIDATION', `missing key ${String(name)}`);
     }
-    const value = input[name];
+    let value;
+    try {
+      value = input[name];
+    } catch {
+      throw makeError('VALIDATION', `invalid value for ${String(name)}`);
+    }
     if (!validator(value)) {
       throw makeError('VALIDATION', `invalid value for ${String(name)}`);
     }
@@ -44,7 +49,12 @@ function requireShape(input, fields) {
 
 function requireActor(actor) {
   if (actor === null || typeof actor !== 'object') throw makeError('AUTH', 'invalid actor');
-  const { tenant, role } = actor;
+  let tenant, role;
+  try {
+    ({ tenant, role } = actor);
+  } catch {
+    throw makeError('AUTH', 'invalid actor');
+  }
   if (typeof tenant !== 'string' || tenant.length === 0) throw makeError('AUTH', 'invalid tenant');
   if (role !== 'admin' && role !== 'reader') throw makeError('AUTH', 'invalid role');
   return { tenant, role };
