@@ -1,6 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 
+const CURRENCY = 'JPY';
+
 function makeError(code, message) {
   const err = new Error(message || code);
   err.code = code;
@@ -92,6 +94,18 @@ export class ReservationService {
         PRIMARY KEY (tenant, operation, idem_key)
       );
     `);
+    // Revision: reservation public resources now carry a constant currency
+    // ('JPY', no conversion, no other currencies in scope). Rows created by
+    // pre-revision code have no such column; add it additively so existing
+    // rows are preserved untouched (id/quantity/amount_cents/version never
+    // change) and simply gain the constant currency at the public boundary
+    // via #toPublic below, regardless of whether this column exists/is set.
+    try {
+      this.#db.exec('ALTER TABLE reservation_resources ADD COLUMN currency TEXT');
+    } catch {
+      // Column already exists (service reopened against an already-revised
+      // database, or a second instance already migrated it) - ignore.
+    }
   }
 
   close() {
@@ -125,6 +139,13 @@ export class ReservationService {
       .run(tenant, operation, key, JSON.stringify(input), JSON.stringify(result));
   }
 
+  // Replayed results may have been persisted by pre-revision code and thus
+  // lack `currency` entirely; the revision is additive and constant, so it
+  // is always re-asserted here regardless of what was stored.
+  #replayPublic(result) {
+    return Object.freeze({ ...result, currency: CURRENCY });
+  }
+
   #toPublic(row) {
     return Object.freeze({
       id: row.id,
@@ -134,6 +155,7 @@ export class ReservationService {
       amountCents: row.amount_cents,
       status: row.status,
       version: row.version,
+      currency: CURRENCY,
     });
   }
 
@@ -170,7 +192,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return this.#replayPublic(existing.result);
       }
       const inv = this.#db
         .prepare('SELECT available, unit_cents FROM reservation_inventory WHERE tenant = ? AND sku = ?')
@@ -181,12 +203,12 @@ export class ReservationService {
       if (!Number.isSafeInteger(amountCents)) throw makeError('VALIDATION', 'amount exceeds safe integer range');
       const id = randomUUID();
       this.#db
-        .prepare('INSERT INTO reservation_resources (id, tenant, sku, quantity, amount_cents, status, version) VALUES (?, ?, ?, ?, ?, ?, 1)')
-        .run(id, a.tenant, sku, quantity, amountCents, 'reserved');
+        .prepare('INSERT INTO reservation_resources (id, tenant, sku, quantity, amount_cents, status, version, currency) VALUES (?, ?, ?, ?, ?, ?, 1, ?)')
+        .run(id, a.tenant, sku, quantity, amountCents, 'reserved', CURRENCY);
       this.#db
         .prepare('UPDATE reservation_inventory SET available = available - ? WHERE tenant = ? AND sku = ?')
         .run(quantity, a.tenant, sku);
-      const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1 };
+      const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1, currency: CURRENCY };
       this.#saveIdempotent(a.tenant, 'reserve', key, canonicalInput, result);
       return Object.freeze({ ...result });
     });
@@ -206,7 +228,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return this.#replayPublic(existing.result);
       }
       const row = this.#db
         .prepare('SELECT * FROM reservation_resources WHERE tenant = ? AND id = ?')
@@ -230,6 +252,7 @@ export class ReservationService {
         amountCents: row.amount_cents,
         status: 'canceled',
         version: newVersion,
+        currency: CURRENCY,
       };
       this.#saveIdempotent(a.tenant, 'cancel', key, canonicalInput, result);
       return Object.freeze({ ...result });
