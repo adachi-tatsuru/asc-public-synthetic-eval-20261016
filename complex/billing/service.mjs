@@ -21,6 +21,16 @@ function hasExactKeys(value, expected) {
     && keys.every((key) => typeof key === 'string' && expected.includes(key));
 }
 
+function readExactFields(value, expected, code = 'VALIDATION', message = 'Invalid input') {
+  try {
+    if (!hasExactKeys(value, expected)) fail(code, message);
+    return Object.fromEntries(expected.map((key) => [key, value[key]]));
+  } catch (error) {
+    if (error?.code === code) throw error;
+    fail(code, message);
+  }
+}
+
 function nonemptyString(value) {
   return typeof value === 'string' && value.length > 0;
 }
@@ -30,12 +40,14 @@ function safeInteger(value, minimum) {
 }
 
 function authorize(actor, mutation = false) {
-  if (!hasExactKeys(actor, ['tenant', 'role'])
-      || !nonemptyString(actor.tenant)
-      || (actor.role !== 'admin' && actor.role !== 'reader')) {
+  const { tenant, role } = readExactFields(
+    actor, ['tenant', 'role'], 'AUTH', 'Invalid actor',
+  );
+  if (!nonemptyString(tenant) || (role !== 'admin' && role !== 'reader')) {
     fail('AUTH', 'Invalid actor');
   }
-  if (mutation && actor.role !== 'admin') fail('FORBIDDEN', 'Mutation requires admin');
+  if (mutation && role !== 'admin') fail('FORBIDDEN', 'Mutation requires admin');
+  return { tenant, role };
 }
 
 function validateKey(key) {
@@ -47,12 +59,15 @@ function validateId(id) {
 }
 
 function validateTransitionInput(input) {
-  if (!hasExactKeys(input, ['key', 'id', 'expectedVersion'])) {
-    fail('VALIDATION', 'Invalid mutation input');
+  const fields = readExactFields(
+    input, ['key', 'id', 'expectedVersion'], 'VALIDATION', 'Invalid mutation input',
+  );
+  validateKey(fields.key);
+  validateId(fields.id);
+  if (!safeInteger(fields.expectedVersion, 1)) {
+    fail('VALIDATION', 'Invalid expectedVersion');
   }
-  validateKey(input.key);
-  validateId(input.id);
-  if (!safeInteger(input.expectedVersion, 1)) fail('VALIDATION', 'Invalid expectedVersion');
+  return fields;
 }
 
 function publicInvoice(row) {
@@ -131,48 +146,49 @@ export class BillingService {
   }
 
   issue(actor, input) {
-    authorize(actor, true);
-    if (!hasExactKeys(input, ['key', 'event'])) fail('VALIDATION', 'Invalid issue input');
-    validateKey(input.key);
-    const event = input.event;
-    if (!hasExactKeys(event, [
+    const { tenant } = authorize(actor, true);
+    const { key, event } = readExactFields(
+      input, ['key', 'event'], 'VALIDATION', 'Invalid issue input',
+    );
+    validateKey(key);
+    const eventFields = readExactFields(event, [
       'id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version',
-    ])) fail('VALIDATION', 'Invalid reservation event');
-    if (!nonemptyString(event.id)
-        || !nonemptyString(event.tenant)
-        || !nonemptyString(event.sku)
-        || !safeInteger(event.quantity, 1)
-        || !safeInteger(event.amountCents, 0)
-        || event.status !== 'reserved'
-        || !safeInteger(event.version, 1)) {
+    ], 'VALIDATION', 'Invalid reservation event');
+    if (!nonemptyString(eventFields.id)
+        || !nonemptyString(eventFields.tenant)
+        || !nonemptyString(eventFields.sku)
+        || !safeInteger(eventFields.quantity, 1)
+        || !safeInteger(eventFields.amountCents, 0)
+        || eventFields.status !== 'reserved'
+        || !safeInteger(eventFields.version, 1)) {
       fail('VALIDATION', 'Invalid reservation event');
     }
-    if (event.tenant !== actor.tenant) fail('FORBIDDEN', 'Event tenant mismatch');
+    if (eventFields.tenant !== tenant) fail('FORBIDDEN', 'Event tenant mismatch');
 
     const canonical = JSON.stringify({
       event: {
-        id: event.id,
-        tenant: event.tenant,
-        sku: event.sku,
-        quantity: event.quantity,
-        amountCents: event.amountCents,
-        status: event.status,
-        version: event.version,
+        id: eventFields.id,
+        tenant: eventFields.tenant,
+        sku: eventFields.sku,
+        quantity: eventFields.quantity,
+        amountCents: eventFields.amountCents,
+        status: eventFields.status,
+        version: eventFields.version,
       },
     });
     return this.transaction(() => {
-      const replay = this.replay(actor.tenant, 'issue', input.key, canonical);
+      const replay = this.replay(tenant, 'issue', key, canonical);
       if (replay !== undefined) return replay;
       const duplicate = this.db.prepare(`
         SELECT 1 FROM ${INVOICES} WHERE tenant = ? AND reservation_id = ?
-      `).get(actor.tenant, event.id);
+      `).get(tenant, eventFields.id);
       if (duplicate) fail('CONFLICT', 'Reservation already invoiced');
 
       const invoice = {
         id: randomUUID(),
-        tenant: actor.tenant,
-        reservationId: event.id,
-        amountCents: event.amountCents,
+        tenant,
+        reservationId: eventFields.id,
+        amountCents: eventFields.amountCents,
         status: 'open',
         version: 1,
       };
@@ -181,24 +197,24 @@ export class BillingService {
           (id, tenant, reservation_id, amount_cents, status, version)
         VALUES (?, ?, ?, ?, 'open', 1)
       `).run(invoice.id, invoice.tenant, invoice.reservationId, invoice.amountCents);
-      this.remember(actor.tenant, 'issue', input.key, canonical, invoice);
+      this.remember(tenant, 'issue', key, canonical, invoice);
       return invoice;
     });
   }
 
   transition(actor, input, operation, fromStatus, toStatus) {
-    authorize(actor, true);
-    validateTransitionInput(input);
-    const canonical = JSON.stringify({id: input.id, expectedVersion: input.expectedVersion});
+    const { tenant } = authorize(actor, true);
+    const { key, id, expectedVersion } = validateTransitionInput(input);
+    const canonical = JSON.stringify({id, expectedVersion});
     return this.transaction(() => {
-      const replay = this.replay(actor.tenant, operation, input.key, canonical);
+      const replay = this.replay(tenant, operation, key, canonical);
       if (replay !== undefined) return replay;
       const row = this.db.prepare(`
         SELECT id, tenant, reservation_id, amount_cents, status, version
         FROM ${INVOICES} WHERE tenant = ? AND id = ?
-      `).get(actor.tenant, input.id);
+      `).get(tenant, id);
       if (!row) fail('NOT_FOUND', 'Invoice not found');
-      if (row.version !== input.expectedVersion || row.status !== fromStatus) {
+      if (row.version !== expectedVersion || row.status !== fromStatus) {
         fail('CONFLICT', 'Invoice state conflict');
       }
       const nextVersion = row.version + 1;
@@ -206,9 +222,9 @@ export class BillingService {
       this.db.prepare(`
         UPDATE ${INVOICES} SET status = ?, version = ?
         WHERE tenant = ? AND id = ?
-      `).run(toStatus, nextVersion, actor.tenant, input.id);
+      `).run(toStatus, nextVersion, tenant, id);
       const result = publicInvoice({...row, status: toStatus, version: nextVersion});
-      this.remember(actor.tenant, operation, input.key, canonical, result);
+      this.remember(tenant, operation, key, canonical, result);
       return result;
     });
   }
@@ -222,28 +238,28 @@ export class BillingService {
   }
 
   get(actor, id) {
-    authorize(actor);
+    const { tenant } = authorize(actor);
     validateId(id);
     const row = this.db.prepare(`
       SELECT id, tenant, reservation_id, amount_cents, status, version
       FROM ${INVOICES} WHERE tenant = ? AND id = ?
-    `).get(actor.tenant, id);
+    `).get(tenant, id);
     if (!row) fail('NOT_FOUND', 'Invoice not found');
     return publicInvoice(row);
   }
 
   list(actor, input) {
-    authorize(actor);
-    if (!hasExactKeys(input, ['page', 'pageSize'])
-        || !safeInteger(input.page, 1)
-        || !safeInteger(input.pageSize, 1)
-        || input.pageSize > 50) {
+    const { tenant } = authorize(actor);
+    const { page, pageSize } = readExactFields(
+      input, ['page', 'pageSize'], 'VALIDATION', 'Invalid pagination',
+    );
+    if (!safeInteger(page, 1) || !safeInteger(pageSize, 1) || pageSize > 50) {
       fail('VALIDATION', 'Invalid pagination');
     }
     const total = this.db.prepare(`
       SELECT COUNT(*) AS total FROM ${INVOICES} WHERE tenant = ?
-    `).get(actor.tenant).total;
-    const offset = (input.page - 1) * input.pageSize;
+    `).get(tenant).total;
+    const offset = (page - 1) * pageSize;
     if (!Number.isSafeInteger(offset) || offset >= total) return {items: [], total};
     const rows = this.db.prepare(`
       SELECT id, tenant, reservation_id, amount_cents, status, version
@@ -251,7 +267,7 @@ export class BillingService {
       WHERE tenant = ?
       ORDER BY sequence
       LIMIT ? OFFSET ?
-    `).all(actor.tenant, input.pageSize, offset);
+    `).all(tenant, pageSize, offset);
     return {items: rows.map(publicInvoice), total};
   }
 
