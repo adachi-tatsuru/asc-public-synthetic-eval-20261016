@@ -5,8 +5,8 @@ import unittest
 from greeting import greeting
 
 class GreetingTest(unittest.TestCase):
-    def test_returns_string(self):
-        self.assertIsInstance(greeting(), str)
+    def test_returns_exact_greeting(self):
+        self.assertEqual(greeting(), "Hello")
 
 if __name__ == "__main__":
     unittest.main()
