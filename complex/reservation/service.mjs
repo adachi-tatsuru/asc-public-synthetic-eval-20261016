@@ -21,26 +21,26 @@ const isSafeIntInRange = (min, max) => (v) => typeof v === 'number' && Number.is
 // non-enumerable and symbol-keyed ones) with a VALIDATION error.
 function requireShape(input, fields) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
-    throw makeError('SYNTHETIC_INVALID_A', 'input must be an object');
+    throw makeError('VALIDATION', 'input must be an object');
   }
   const keys = ownKeys(input);
   const required = fields.map(([name]) => name);
   if (keys.length !== required.length) {
-    throw makeError('SYNTHETIC_INVALID_A', 'unexpected or missing keys');
+    throw makeError('VALIDATION', 'unexpected or missing keys');
   }
   const result = {};
   for (const [name, validator] of fields) {
     if (!Object.prototype.hasOwnProperty.call(input, name)) {
-      throw makeError('SYNTHETIC_INVALID_A', `missing key ${String(name)}`);
+      throw makeError('VALIDATION', `missing key ${String(name)}`);
     }
     let value;
     try {
       value = input[name];
     } catch {
-      throw makeError('SYNTHETIC_INVALID_A', `invalid value for ${String(name)}`);
+      throw makeError('VALIDATION', `invalid value for ${String(name)}`);
     }
     if (!validator(value)) {
-      throw makeError('SYNTHETIC_INVALID_A', `invalid value for ${String(name)}`);
+      throw makeError('VALIDATION', `invalid value for ${String(name)}`);
     }
     result[name] = value;
   }
@@ -189,7 +189,7 @@ export class ReservationService {
       if (!inv) throw makeError('NOT_FOUND', 'unknown sku');
       if (quantity > inv.available) throw makeError('CONFLICT', 'insufficient inventory');
       const amountCents = quantity * inv.unit_cents;
-      if (!Number.isSafeInteger(amountCents)) throw makeError('SYNTHETIC_INVALID_A', 'amount exceeds safe integer range');
+      if (!Number.isSafeInteger(amountCents)) throw makeError('VALIDATION', 'amount exceeds safe integer range');
       const id = randomUUID();
       this.#db
         .prepare('INSERT INTO reservation_resources (id, tenant, sku, quantity, amount_cents, status, version) VALUES (?, ?, ?, ?, ?, ?, 1)')
