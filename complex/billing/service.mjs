@@ -29,7 +29,7 @@ const nonempty = value => typeof value === 'string' && value.length > 0;
 const integer = (value, minimum) => Number.isSafeInteger(value) && value >= minimum;
 
 function actorSnapshot(actor, mutation = false) {
-  if (actor === null || typeof actor !== 'object') throw failure('AUTH');
+  if (actor === null || typeof actor !== 'object' || Array.isArray(actor)) throw failure('AUTH');
   let tenant, role;
   try {
     tenant = actor.tenant;
