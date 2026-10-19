@@ -16,18 +16,18 @@ function hasExactKeys(value, expected) {
 }
 
 function requireExact(value, keys) {
-  if (!hasExactKeys(value, keys)) throw failure('VALIDATION', 'Invalid input');
+  if (!hasExactKeys(value, keys)) throw failure('SYNTHETIC_INVALID_A', 'Invalid input');
 }
 
 function requireNonemptyString(value) {
   if (typeof value !== 'string' || value.length === 0) {
-    throw failure('VALIDATION', 'Expected a nonempty string');
+    throw failure('SYNTHETIC_INVALID_A', 'Expected a nonempty string');
   }
 }
 
 function requireSafeInteger(value, minimum) {
   if (!Number.isSafeInteger(value) || value < minimum) {
-    throw failure('VALIDATION', 'Expected a bounded integer');
+    throw failure('SYNTHETIC_INVALID_A', 'Expected a bounded integer');
   }
 }
 
@@ -188,7 +188,7 @@ export class ReservationService {
       const unitCents = asNumber(inventory.unit_cents);
       if (input.quantity > available) throw failure('CONFLICT', 'Insufficient inventory');
       if (unitCents !== 0 && input.quantity > Math.floor(Number.MAX_SAFE_INTEGER / unitCents)) {
-        throw failure('VALIDATION', 'Reservation amount is not a safe integer');
+        throw failure('SYNTHETIC_INVALID_A', 'Reservation amount is not a safe integer');
       }
 
       const result = {
@@ -286,7 +286,7 @@ export class ReservationService {
     requireExact(input, ['page', 'pageSize']);
     requireSafeInteger(input.page, 1);
     requireSafeInteger(input.pageSize, 1);
-    if (input.pageSize > 50) throw failure('VALIDATION', 'Page size is too large');
+    if (input.pageSize > 50) throw failure('SYNTHETIC_INVALID_A', 'Page size is too large');
 
     this.#database.exec('BEGIN');
     try {
