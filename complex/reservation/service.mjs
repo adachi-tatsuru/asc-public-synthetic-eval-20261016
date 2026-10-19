@@ -16,15 +16,20 @@ function fail(code, message) {
 }
 
 function hasExactDataKeys(value, keys) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const ownKeys = Reflect.ownKeys(value);
-  if (ownKeys.length !== keys.length || ownKeys.some((key) => typeof key !== 'string' || !keys.includes(key))) {
+  try {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.length !== keys.length || ownKeys.some((key) => typeof key !== 'string' || !keys.includes(key))) {
+      return false;
+    }
+    return keys.every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return descriptor && Object.hasOwn(descriptor, 'value');
+    });
+  } catch {
+    // Normalize proxy/revocation failures through the caller's contract error.
     return false;
   }
-  return keys.every((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor && Object.hasOwn(descriptor, 'value');
-  });
 }
 
 function exactInput(value, keys) {
