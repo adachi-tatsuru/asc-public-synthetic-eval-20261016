@@ -1,12 +1,15 @@
+import os
 import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from greeting import greeting
 
-class GreetingTest(unittest.TestCase):
-    def test_returns_string(self):
-        self.assertIsInstance(greeting(), str)
+
+def test_greeting_returns_hello():
+    assert greeting() == "Hello"
+
 
 if __name__ == "__main__":
-    unittest.main()
+    test_greeting_returns_hello()
+    print("OK")
