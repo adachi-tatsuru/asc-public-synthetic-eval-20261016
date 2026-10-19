@@ -152,7 +152,6 @@ export class BillingService {
         amountCents,
         status,
         version,
-        currency,
       });
 
       const existing = this.#findIdempotent(writer.tenant, 'issue', key);
