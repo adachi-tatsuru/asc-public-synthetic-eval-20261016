@@ -134,7 +134,16 @@ export class ReservationService {
       amountCents: row.amount_cents,
       status: row.status,
       version: row.version,
+      currency: 'JPY',
     });
+  }
+
+  // Idempotency records may have been written by pre-revision code, whose
+  // stored result_json lacks `currency`. Replays must still surface the
+  // constant currency at the public boundary without altering any other
+  // stored field.
+  #replayPublic(result) {
+    return Object.freeze({ ...result, currency: 'JPY' });
   }
 
   seed(actor, input) {
@@ -170,7 +179,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return this.#replayPublic(existing.result);
       }
       const inv = this.#db
         .prepare('SELECT available, unit_cents FROM reservation_inventory WHERE tenant = ? AND sku = ?')
@@ -188,7 +197,7 @@ export class ReservationService {
         .run(quantity, a.tenant, sku);
       const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1 };
       this.#saveIdempotent(a.tenant, 'reserve', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return Object.freeze({ ...result, currency: 'JPY' });
     });
   }
 
@@ -206,7 +215,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return this.#replayPublic(existing.result);
       }
       const row = this.#db
         .prepare('SELECT * FROM reservation_resources WHERE tenant = ? AND id = ?')
@@ -232,7 +241,7 @@ export class ReservationService {
         version: newVersion,
       };
       this.#saveIdempotent(a.tenant, 'cancel', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return Object.freeze({ ...result, currency: 'JPY' });
     });
   }
 
