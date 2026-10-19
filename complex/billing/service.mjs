@@ -145,6 +145,8 @@ export class BillingService {
     if (eventTenant !== writer.tenant) fail('FORBIDDEN', 'event tenant mismatch');
 
     return this.#runInTransaction(() => {
+      // currency is excluded: it is already constrained to EXPECTED_CURRENCY above, and
+      // excluding it keeps canonical comparisons compatible with pre-revision idempotency records.
       const canonicalInput = JSON.stringify({
         id: reservationId,
         tenant: eventTenant,
@@ -153,7 +155,6 @@ export class BillingService {
         amountCents,
         status,
         version,
-        currency,
       });
 
       const existing = this.#findIdempotent(writer.tenant, 'issue', key);
