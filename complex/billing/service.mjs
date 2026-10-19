@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
 const INVOICE_KEYS = ['id', 'tenant', 'reservationId', 'amountCents', 'status', 'version'];
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const LEGACY_EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const EVENT_KEYS = [...LEGACY_EVENT_KEYS, 'currency'];
 
 function failure(code, message) {
   const error = new Error(message);
@@ -54,7 +55,8 @@ function validateIssueInput(input) {
       !safeInteger(event.quantity, 1) ||
       !safeInteger(event.amountCents, 0) ||
       event.status !== 'reserved' ||
-      !safeInteger(event.version, 1)) {
+      !safeInteger(event.version, 1) ||
+      event.currency !== 'JPY') {
     throw failure('VALIDATION', 'Invalid reservation event');
   }
   return {
@@ -67,6 +69,7 @@ function validateIssueInput(input) {
       amountCents: event.amountCents,
       status: event.status,
       version: event.version,
+      currency: event.currency,
     },
   };
 }
@@ -162,7 +165,20 @@ export class BillingService {
       WHERE tenant = ? AND operation = ? AND idempotency_key = ?
     `).get(tenant, operation, key);
     if (!row) return undefined;
-    if (row.request_json !== requestJson) {
+    let matches = row.request_json === requestJson;
+    if (!matches && operation === 'issue') {
+      try {
+        const legacy = JSON.parse(row.request_json);
+        if (hasExactKeys(legacy, ['key', 'event']) &&
+            hasExactKeys(legacy.event, LEGACY_EVENT_KEYS)) {
+          legacy.event.currency = 'JPY';
+          matches = JSON.stringify(legacy) === requestJson;
+        }
+      } catch {
+        // A malformed stored request cannot match a valid revised request.
+      }
+    }
+    if (!matches) {
       throw failure('CONFLICT', 'Idempotency key was used with different input');
     }
     return deserializeInvoice(row.result_json);
