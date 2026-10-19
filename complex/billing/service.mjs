@@ -2,6 +2,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 
 const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const EVENT_KEYS_WITH_CURRENCY = [...EVENT_KEYS, 'currency'];
 
 function fail(code, message) {
   const error = new Error(message || code);
@@ -118,7 +119,7 @@ export class BillingService {
     const {key, event} = input;
     if (!isNonEmptyString(key)) fail('VALIDATION', 'invalid idempotency key');
     if (!isPlainRecord(event)) fail('VALIDATION', 'invalid event');
-    if (!hasExactOwnKeys(event, EVENT_KEYS)) fail('VALIDATION', 'invalid event shape');
+    if (!hasExactOwnKeys(event, EVENT_KEYS_WITH_CURRENCY)) fail('VALIDATION', 'invalid event shape');
 
     // Read each property exactly once; validate and persist the same local values.
     const {
@@ -129,6 +130,7 @@ export class BillingService {
       amountCents,
       status,
       version,
+      currency,
     } = event;
 
     if (!isNonEmptyString(reservationId)) fail('VALIDATION', 'invalid event id');
@@ -138,6 +140,7 @@ export class BillingService {
     if (!isSafeInt(amountCents) || amountCents < 0) fail('VALIDATION', 'invalid amountCents');
     if (status !== 'reserved') fail('VALIDATION', 'invalid status');
     if (!isSafeInt(version) || version < 1) fail('VALIDATION', 'invalid version');
+    if (currency !== 'JPY') fail('VALIDATION', 'invalid currency');
 
     if (eventTenant !== writer.tenant) fail('FORBIDDEN', 'event tenant mismatch');
 
