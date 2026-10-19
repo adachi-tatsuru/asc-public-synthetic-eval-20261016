@@ -56,6 +56,7 @@ function publicReservation(row) {
     amountCents: asNumber(row.amount_cents),
     status: row.status,
     version: asNumber(row.version),
+    currency: 'JPY',
   };
 }
 
@@ -136,7 +137,7 @@ export class ReservationService {
     if (row.canonical_input !== canonicalInput) {
       throw failure('CONFLICT', 'Idempotency key was used for a different input');
     }
-    return JSON.parse(row.result);
+    return {...JSON.parse(row.result), currency: 'JPY'};
   }
 
   #record(tenant, operation, key, canonicalInput, result) {
@@ -199,6 +200,7 @@ export class ReservationService {
         amountCents: input.quantity * unitCents,
         status: 'reserved',
         version: 1,
+        currency: 'JPY',
       };
       this.#statement(`
         UPDATE asc_reservation_inventory

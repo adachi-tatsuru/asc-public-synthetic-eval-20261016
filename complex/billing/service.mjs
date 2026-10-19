@@ -67,7 +67,7 @@ function publicInvoice(row) {
 function canonicalIssueInput(input) {
   requireExactKeys(input, ['key', 'event']);
   validateKey(input.key);
-  requireExactKeys(input.event, ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version']);
+  requireExactKeys(input.event, ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency']);
   const event = input.event;
   if (
     !isNonemptyString(event.id) ||
@@ -76,10 +76,13 @@ function canonicalIssueInput(input) {
     !isSafeInteger(event.quantity, 1) ||
     !isSafeInteger(event.amountCents, 0) ||
     event.status !== 'reserved' ||
-    !isSafeInteger(event.version, 1)
+    !isSafeInteger(event.version, 1) ||
+    event.currency !== 'JPY'
   ) {
     fail('VALIDATION', 'Invalid reservation event');
   }
+  // Currency is fixed, so retaining the legacy canonical form keeps accepted
+  // pre-revision issue operations replayable with revised reservation events.
   return JSON.stringify({
     key: input.key,
     event: {
