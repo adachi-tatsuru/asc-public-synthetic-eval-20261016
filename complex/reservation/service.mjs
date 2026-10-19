@@ -134,6 +134,7 @@ export class ReservationService {
       amountCents: row.amount_cents,
       status: row.status,
       version: row.version,
+      currency: 'JPY',
     });
   }
 
@@ -170,7 +171,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return Object.freeze({ ...existing.result, currency: 'JPY' });
       }
       const inv = this.#db
         .prepare('SELECT available, unit_cents FROM reservation_inventory WHERE tenant = ? AND sku = ?')
@@ -188,7 +189,7 @@ export class ReservationService {
         .run(quantity, a.tenant, sku);
       const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1 };
       this.#saveIdempotent(a.tenant, 'reserve', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return Object.freeze({ ...result, currency: 'JPY' });
     });
   }
 
@@ -206,7 +207,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return Object.freeze({ ...existing.result, currency: 'JPY' });
       }
       const row = this.#db
         .prepare('SELECT * FROM reservation_resources WHERE tenant = ? AND id = ?')
@@ -232,7 +233,7 @@ export class ReservationService {
         version: newVersion,
       };
       this.#saveIdempotent(a.tenant, 'cancel', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return Object.freeze({ ...result, currency: 'JPY' });
     });
   }
 
