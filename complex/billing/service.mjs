@@ -1,7 +1,9 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency'];
+// Contract revision: the only supported currency. No conversion or other currencies are in scope.
+const CURRENCY = 'JPY';
 
 function fail(code, message) {
   const error = new Error(message || code);
@@ -129,6 +131,7 @@ export class BillingService {
       amountCents,
       status,
       version,
+      currency,
     } = event;
 
     if (!isNonEmptyString(reservationId)) fail('VALIDATION', 'invalid event id');
@@ -138,10 +141,15 @@ export class BillingService {
     if (!isSafeInt(amountCents) || amountCents < 0) fail('VALIDATION', 'invalid amountCents');
     if (status !== 'reserved') fail('VALIDATION', 'invalid status');
     if (!isSafeInt(version) || version < 1) fail('VALIDATION', 'invalid version');
+    if (currency !== CURRENCY) fail('VALIDATION', 'invalid currency');
 
     if (eventTenant !== writer.tenant) fail('FORBIDDEN', 'event tenant mismatch');
 
     return this.#runInTransaction(() => {
+      // Canonical idempotency input intentionally omits currency: it is validated to be
+      // the constant 'JPY', so it carries no information. Keeping the pre-revision
+      // canonical form means idempotency records stored before the revision still
+      // match a replay of the same event now carrying currency 'JPY'.
       const canonicalInput = JSON.stringify({
         id: reservationId,
         tenant: eventTenant,
