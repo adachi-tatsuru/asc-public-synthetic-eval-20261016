@@ -60,6 +60,8 @@ function canonicalEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+const CURRENCY = 'JPY';
+
 export class ReservationService {
   #db;
 
@@ -134,6 +136,7 @@ export class ReservationService {
       amountCents: row.amount_cents,
       status: row.status,
       version: row.version,
+      currency: CURRENCY,
     });
   }
 
@@ -170,7 +173,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return Object.freeze({ ...existing.result, currency: CURRENCY });
       }
       const inv = this.#db
         .prepare('SELECT available, unit_cents FROM reservation_inventory WHERE tenant = ? AND sku = ?')
@@ -186,7 +189,7 @@ export class ReservationService {
       this.#db
         .prepare('UPDATE reservation_inventory SET available = available - ? WHERE tenant = ? AND sku = ?')
         .run(quantity, a.tenant, sku);
-      const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1 };
+      const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1, currency: CURRENCY };
       this.#saveIdempotent(a.tenant, 'reserve', key, canonicalInput, result);
       return Object.freeze({ ...result });
     });
@@ -206,7 +209,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return Object.freeze({ ...existing.result, currency: CURRENCY });
       }
       const row = this.#db
         .prepare('SELECT * FROM reservation_resources WHERE tenant = ? AND id = ?')
@@ -230,6 +233,7 @@ export class ReservationService {
         amountCents: row.amount_cents,
         status: 'canceled',
         version: newVersion,
+        currency: CURRENCY,
       };
       this.#saveIdempotent(a.tenant, 'cancel', key, canonicalInput, result);
       return Object.freeze({ ...result });

@@ -1,7 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency'];
 
 function fail(code, message) {
   const error = new Error(message || code);
@@ -129,6 +129,7 @@ export class BillingService {
       amountCents,
       status,
       version,
+      currency,
     } = event;
 
     if (!isNonEmptyString(reservationId)) fail('VALIDATION', 'invalid event id');
@@ -138,6 +139,7 @@ export class BillingService {
     if (!isSafeInt(amountCents) || amountCents < 0) fail('VALIDATION', 'invalid amountCents');
     if (status !== 'reserved') fail('VALIDATION', 'invalid status');
     if (!isSafeInt(version) || version < 1) fail('VALIDATION', 'invalid version');
+    if (currency !== 'JPY') fail('VALIDATION', 'invalid currency');
 
     if (eventTenant !== writer.tenant) fail('FORBIDDEN', 'event tenant mismatch');
 
@@ -150,11 +152,14 @@ export class BillingService {
         amountCents,
         status,
         version,
+        currency,
       });
 
       const existing = this.#findIdempotent(writer.tenant, 'issue', key);
       if (existing) {
-        if (existing.input_json !== canonicalInput) fail('CONFLICT', 'idempotency key reused with different input');
+        const storedInput = JSON.parse(existing.input_json);
+        if (!('currency' in storedInput)) storedInput.currency = 'JPY';
+        if (JSON.stringify(storedInput) !== canonicalInput) fail('CONFLICT', 'idempotency key reused with different input');
         return Object.freeze(JSON.parse(existing.result_json));
       }
 
