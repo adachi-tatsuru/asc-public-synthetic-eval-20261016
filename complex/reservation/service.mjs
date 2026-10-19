@@ -11,6 +11,26 @@ function ownKeys(obj) {
   return [...Object.getOwnPropertyNames(obj), ...Object.getOwnPropertySymbols(obj)];
 }
 
+// Contract revision: every public reservation resource carries this constant
+// currency. It is added at the public boundary only, so rows and replay records
+// written before the revision (which lack it) are returned unchanged otherwise.
+const CURRENCY = 'JPY';
+
+// Builds the public reservation shape from a stored result/row-like object.
+// Any stored `currency` is ignored; the boundary always emits the constant.
+function publicReservation(r) {
+  return Object.freeze({
+    id: r.id,
+    tenant: r.tenant,
+    sku: r.sku,
+    quantity: r.quantity,
+    amountCents: r.amountCents,
+    status: r.status,
+    version: r.version,
+    currency: CURRENCY,
+  });
+}
+
 const isNonEmptyString = (v) => typeof v === 'string' && v.length > 0;
 const isSafeIntAtLeast = (min) => (v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= min;
 const isSafeIntInRange = (min, max) => (v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max;
@@ -20,6 +40,15 @@ const isSafeIntInRange = (min, max) => (v) => typeof v === 'number' && Number.is
 // anything else (wrong type, missing keys, extra/unknown keys including
 // non-enumerable and symbol-keyed ones) with a VALIDATION error.
 function requireShape(input, fields) {
+  try {
+    return readShape(input, fields);
+  } catch (err) {
+    if (err && err.code === 'VALIDATION') throw err;
+    throw makeError('VALIDATION', 'input could not be read');
+  }
+}
+
+function readShape(input, fields) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     throw makeError('VALIDATION', 'input must be an object');
   }
@@ -44,7 +73,12 @@ function requireShape(input, fields) {
 
 function requireActor(actor) {
   if (actor === null || typeof actor !== 'object') throw makeError('AUTH', 'invalid actor');
-  const { tenant, role } = actor;
+  let tenant, role;
+  try {
+    ({ tenant, role } = actor);
+  } catch {
+    throw makeError('AUTH', 'invalid actor');
+  }
   if (typeof tenant !== 'string' || tenant.length === 0) throw makeError('AUTH', 'invalid tenant');
   if (role !== 'admin' && role !== 'reader') throw makeError('AUTH', 'invalid role');
   return { tenant, role };
@@ -126,7 +160,7 @@ export class ReservationService {
   }
 
   #toPublic(row) {
-    return Object.freeze({
+    return publicReservation({
       id: row.id,
       tenant: row.tenant,
       sku: row.sku,
@@ -170,7 +204,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return publicReservation(existing.result);
       }
       const inv = this.#db
         .prepare('SELECT available, unit_cents FROM reservation_inventory WHERE tenant = ? AND sku = ?')
@@ -188,7 +222,7 @@ export class ReservationService {
         .run(quantity, a.tenant, sku);
       const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1 };
       this.#saveIdempotent(a.tenant, 'reserve', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return publicReservation(result);
     });
   }
 
@@ -206,7 +240,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return publicReservation(existing.result);
       }
       const row = this.#db
         .prepare('SELECT * FROM reservation_resources WHERE tenant = ? AND id = ?')
@@ -232,7 +266,7 @@ export class ReservationService {
         version: newVersion,
       };
       this.#saveIdempotent(a.tenant, 'cancel', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return publicReservation(result);
     });
   }
 
