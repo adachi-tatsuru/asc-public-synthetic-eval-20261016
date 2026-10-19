@@ -1,7 +1,8 @@
 import {randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const LEGACY_EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const EVENT_KEYS = [...LEGACY_EVENT_KEYS, 'currency'];
 
 function failure(code, message) {
   const error = new Error(message);
@@ -96,11 +97,12 @@ export class BillingService {
     }
   }
 
-  #replayOrConflict(tenant, operation, key, canonicalInput) {
+  #replayOrConflict(tenant, operation, key, canonicalInput, compatibleCanonicalInput) {
     const row = this.#db.prepare(`SELECT canonical_input, result_json FROM billing_idempotency
       WHERE tenant = ? AND operation = ? AND idempotency_key = ?`).get(tenant, operation, key);
     if (!row) return undefined;
-    if (row.canonical_input !== canonicalInput) throw failure('CONFLICT', 'Idempotency key was used with different input');
+    if (row.canonical_input !== canonicalInput && row.canonical_input !== compatibleCanonicalInput)
+      throw failure('CONFLICT', 'Idempotency key was used with different input');
     return copyInvoice(JSON.parse(row.result_json));
   }
 
@@ -117,11 +119,15 @@ export class BillingService {
     const event = snapshot(request.event, EVENT_KEYS);
     if (!nonempty(event.id) || !nonempty(event.tenant) || !nonempty(event.sku) ||
         !positiveSafe(event.quantity) || !nonnegativeSafe(event.amountCents) ||
-        event.status !== 'reserved' || !positiveSafe(event.version)) throw failure('VALIDATION', 'Invalid reservation event');
+        event.status !== 'reserved' || !positiveSafe(event.version) || event.currency !== 'JPY')
+      throw failure('VALIDATION', 'Invalid reservation event');
     if (event.tenant !== principal.tenant) throw failure('FORBIDDEN', 'Event tenant differs from actor tenant');
     const canonicalInput = JSON.stringify(event);
+    const legacyCanonicalInput = JSON.stringify(Object.fromEntries(
+      LEGACY_EVENT_KEYS.map(key => [key, event[key]])));
     return this.#transaction(() => {
-      const replay = this.#replayOrConflict(principal.tenant, 'issue', request.key, canonicalInput);
+      const replay = this.#replayOrConflict(
+        principal.tenant, 'issue', request.key, canonicalInput, legacyCanonicalInput);
       if (replay) return replay;
       const existing = this.#db.prepare('SELECT 1 FROM billing_invoices WHERE tenant = ? AND reservation_id = ?')
         .get(principal.tenant, event.id);

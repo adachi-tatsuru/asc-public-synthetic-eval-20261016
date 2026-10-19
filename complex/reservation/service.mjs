@@ -55,7 +55,8 @@ function publicReservation(row) {
     tenant: row.tenant,
     sku: row.sku,
     quantity: row.quantity,
-    amountCents: row.amount_cents,
+    amountCents: row.amountCents ?? row.amount_cents,
+    currency: 'JPY',
     status: row.status,
     version: row.version,
   };
@@ -121,7 +122,7 @@ export class ReservationService {
     if (row.canonical_input !== canonicalInput) {
       throw failure('CONFLICT', 'Idempotency key was used with different input');
     }
-    return JSON.parse(row.result_json);
+    return publicReservation(JSON.parse(row.result_json));
   }
 
   #remember(tenant, operation, key, canonicalInput, result) {
@@ -180,6 +181,7 @@ export class ReservationService {
         sku: values.sku,
         quantity: values.quantity,
         amountCents,
+        currency: 'JPY',
         status: 'reserved',
         version: 1,
       };
