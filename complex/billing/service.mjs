@@ -1,7 +1,9 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+// Revision: reservation events now carry the constant currency 'JPY'.
+const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency'];
+const SUPPORTED_CURRENCY = 'JPY';
 
 function fail(code, message) {
   const error = new Error(message || code);
@@ -27,6 +29,22 @@ function hasExactOwnKeys(obj, keys) {
   if (ownKeys.length !== keys.length) return false;
   const expected = new Set(keys);
   return ownKeys.every((k) => typeof k === 'string' && expected.has(k));
+}
+
+// Validate the exact own-key shape and read each property exactly once.
+// Any failure while inspecting/reading the input (throwing getters, proxies)
+// is reported as the contract error code instead of leaking a raw error.
+function snapshot(obj, keys, code, message) {
+  let values;
+  try {
+    if (!hasExactOwnKeys(obj, keys)) fail(code, message);
+    values = {};
+    for (const k of keys) values[k] = obj[k];
+  } catch (error) {
+    if (error && error.code === code) throw error;
+    fail(code, message);
+  }
+  return values;
 }
 
 function toPublicInvoice(row) {
@@ -74,7 +92,12 @@ export class BillingService {
 
   #checkActor(actor) {
     if (!isPlainRecord(actor)) fail('AUTH', 'invalid actor');
-    const {tenant, role} = actor;
+    let tenant, role;
+    try {
+      ({tenant, role} = actor);
+    } catch {
+      fail('AUTH', 'invalid actor');
+    }
     if (!isNonEmptyString(tenant)) fail('AUTH', 'invalid tenant');
     if (role !== 'admin' && role !== 'reader') fail('AUTH', 'invalid role');
     return {tenant, role};
@@ -114,11 +137,9 @@ export class BillingService {
   issue(actor, input) {
     const writer = this.#checkWriter(actor);
 
-    if (!hasExactOwnKeys(input, ['key', 'event'])) fail('VALIDATION', 'invalid issue input');
-    const {key, event} = input;
+    const {key, event} = snapshot(input, ['key', 'event'], 'VALIDATION', 'invalid issue input');
     if (!isNonEmptyString(key)) fail('VALIDATION', 'invalid idempotency key');
     if (!isPlainRecord(event)) fail('VALIDATION', 'invalid event');
-    if (!hasExactOwnKeys(event, EVENT_KEYS)) fail('VALIDATION', 'invalid event shape');
 
     // Read each property exactly once; validate and persist the same local values.
     const {
@@ -129,7 +150,8 @@ export class BillingService {
       amountCents,
       status,
       version,
-    } = event;
+      currency,
+    } = snapshot(event, EVENT_KEYS, 'VALIDATION', 'invalid event shape');
 
     if (!isNonEmptyString(reservationId)) fail('VALIDATION', 'invalid event id');
     if (!isNonEmptyString(eventTenant)) fail('VALIDATION', 'invalid event tenant');
@@ -138,10 +160,14 @@ export class BillingService {
     if (!isSafeInt(amountCents) || amountCents < 0) fail('VALIDATION', 'invalid amountCents');
     if (status !== 'reserved') fail('VALIDATION', 'invalid status');
     if (!isSafeInt(version) || version < 1) fail('VALIDATION', 'invalid version');
+    if (currency !== SUPPORTED_CURRENCY) fail('VALIDATION', 'unsupported currency');
 
     if (eventTenant !== writer.tenant) fail('FORBIDDEN', 'event tenant mismatch');
 
     return this.#runInTransaction(() => {
+      // currency is validated to the single constant 'JPY', so it carries no
+      // extra information; it is deliberately omitted from the canonical form
+      // so idempotency records stored before the revision still replay.
       const canonicalInput = JSON.stringify({
         id: reservationId,
         tenant: eventTenant,
@@ -185,8 +211,7 @@ export class BillingService {
   #transition(actor, input, operation, fromStatus, toStatus) {
     const writer = this.#checkWriter(actor);
 
-    if (!hasExactOwnKeys(input, ['key', 'id', 'expectedVersion'])) fail('VALIDATION', `invalid ${operation} input`);
-    const {key, id, expectedVersion} = input;
+    const {key, id, expectedVersion} = snapshot(input, ['key', 'id', 'expectedVersion'], 'VALIDATION', `invalid ${operation} input`);
     if (!isNonEmptyString(key)) fail('VALIDATION', 'invalid idempotency key');
     if (!isNonEmptyString(id)) fail('VALIDATION', 'invalid id');
     if (!isSafeInt(expectedVersion) || expectedVersion < 1) fail('VALIDATION', 'invalid expectedVersion');
@@ -245,8 +270,7 @@ export class BillingService {
 
   list(actor, input) {
     const reader = this.#checkActor(actor);
-    if (!hasExactOwnKeys(input, ['page', 'pageSize'])) fail('VALIDATION', 'invalid list input');
-    const {page, pageSize} = input;
+    const {page, pageSize} = snapshot(input, ['page', 'pageSize'], 'VALIDATION', 'invalid list input');
     if (!isSafeInt(page) || page < 1) fail('VALIDATION', 'invalid page');
     if (!isSafeInt(pageSize) || pageSize < 1 || pageSize > 50) fail('VALIDATION', 'invalid pageSize');
 
