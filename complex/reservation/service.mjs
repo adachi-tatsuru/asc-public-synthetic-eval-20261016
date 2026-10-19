@@ -9,13 +9,21 @@ function fail(code, message) {
 
 function hasExactOwnKeys(value, expected) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const actual = Reflect.ownKeys(value);
-  return actual.length === expected.length && expected.every((key) => actual.includes(key));
+  try {
+    const actual = Reflect.ownKeys(value);
+    return actual.length === expected.length && expected.every((key) => actual.includes(key));
+  } catch {
+    return false;
+  }
 }
 
 function requireObject(value, keys) {
   if (!hasExactOwnKeys(value, keys)) fail('VALIDATION', 'Invalid input');
-  return value;
+  try {
+    return Object.fromEntries(keys.map((key) => [key, value[key]]));
+  } catch {
+    fail('VALIDATION', 'Invalid input');
+  }
 }
 
 function requireString(value) {
@@ -128,10 +136,10 @@ export class ReservationService {
 
   seed(actor, input) {
     const tenant = this._actor(actor, true);
-    requireObject(input, ['sku', 'available', 'unitCents']);
-    const sku = requireString(input.sku);
-    const available = requireInteger(input.available, 0);
-    const unitCents = requireInteger(input.unitCents, 0);
+    const values = requireObject(input, ['sku', 'available', 'unitCents']);
+    const sku = requireString(values.sku);
+    const available = requireInteger(values.available, 0);
+    const unitCents = requireInteger(values.unitCents, 0);
 
     return this._transaction(() => {
       const existing = this.database.prepare(`
@@ -147,10 +155,10 @@ export class ReservationService {
 
   reserve(actor, input) {
     const tenant = this._actor(actor, true);
-    requireObject(input, ['key', 'sku', 'quantity']);
-    const key = requireString(input.key);
-    const sku = requireString(input.sku);
-    const quantity = requireInteger(input.quantity, 1);
+    const values = requireObject(input, ['key', 'sku', 'quantity']);
+    const key = requireString(values.key);
+    const sku = requireString(values.sku);
+    const quantity = requireInteger(values.quantity, 1);
     const canonicalInput = JSON.stringify({ sku, quantity });
 
     return this._transaction(() => {
@@ -191,10 +199,10 @@ export class ReservationService {
 
   cancel(actor, input) {
     const tenant = this._actor(actor, true);
-    requireObject(input, ['key', 'id', 'expectedVersion']);
-    const key = requireString(input.key);
-    const id = requireString(input.id);
-    const expectedVersion = requireInteger(input.expectedVersion, 1);
+    const values = requireObject(input, ['key', 'id', 'expectedVersion']);
+    const key = requireString(values.key);
+    const id = requireString(values.id);
+    const expectedVersion = requireInteger(values.expectedVersion, 1);
     const canonicalInput = JSON.stringify({ id, expectedVersion });
 
     return this._transaction(() => {
@@ -248,9 +256,9 @@ export class ReservationService {
 
   list(actor, input) {
     const tenant = this._actor(actor);
-    requireObject(input, ['page', 'pageSize']);
-    const page = requireInteger(input.page, 1);
-    const pageSize = requireInteger(input.pageSize, 1);
+    const values = requireObject(input, ['page', 'pageSize']);
+    const page = requireInteger(values.page, 1);
+    const pageSize = requireInteger(values.pageSize, 1);
     if (pageSize > 50) fail('VALIDATION', 'Page size is too large');
 
     return this._transaction(() => {

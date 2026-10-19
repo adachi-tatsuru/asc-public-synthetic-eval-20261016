@@ -12,8 +12,12 @@ const fail = code => { throw new ServiceError(code); };
 
 function hasExactOwnKeys(value, expected) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const keys = Reflect.ownKeys(value);
-  return keys.length === expected.length && expected.every(key => keys.includes(key));
+  try {
+    const keys = Reflect.ownKeys(value);
+    return keys.length === expected.length && expected.every(key => keys.includes(key));
+  } catch {
+    return false;
+  }
 }
 
 const nonemptyString = value => typeof value === 'string' && value.length > 0;
