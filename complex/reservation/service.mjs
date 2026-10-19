@@ -58,6 +58,20 @@ function publicReservation(row) {
     amountCents: row.amount_cents,
     status: row.status,
     version: row.version,
+    currency: 'JPY',
+  };
+}
+
+function replayedReservation(value) {
+  return {
+    id: value.id,
+    tenant: value.tenant,
+    sku: value.sku,
+    quantity: value.quantity,
+    amountCents: value.amountCents,
+    status: value.status,
+    version: value.version,
+    currency: 'JPY',
   };
 }
 
@@ -121,7 +135,7 @@ export class ReservationService {
     if (row.canonical_input !== canonicalInput) {
       throw failure('CONFLICT', 'Idempotency key was used with different input');
     }
-    return JSON.parse(row.result_json);
+    return replayedReservation(JSON.parse(row.result_json));
   }
 
   #remember(tenant, operation, key, canonicalInput, result) {
@@ -182,6 +196,7 @@ export class ReservationService {
         amountCents,
         status: 'reserved',
         version: 1,
+        currency: 'JPY',
       };
       this.#database.prepare(`
         UPDATE reservation_inventory SET available = available - ?
