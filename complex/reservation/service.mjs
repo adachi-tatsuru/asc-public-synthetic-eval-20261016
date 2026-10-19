@@ -62,6 +62,7 @@ function publicReservation(row) {
     amountCents: row.amountCents,
     status: row.status,
     version: row.version,
+    currency: 'JPY',
   });
 }
 
