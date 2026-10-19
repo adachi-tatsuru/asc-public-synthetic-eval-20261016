@@ -15,32 +15,36 @@ function fail(code, message) {
   throw error;
 }
 
-function hasExactDataKeys(value, keys) {
+function copyExactData(value, keys) {
   try {
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
     const ownKeys = Reflect.ownKeys(value);
     if (ownKeys.length !== keys.length || ownKeys.some((key) => typeof key !== 'string' || !keys.includes(key))) {
-      return false;
+      return undefined;
     }
-    return keys.every((key) => {
+    const copy = {};
+    for (const key of keys) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      return descriptor && Object.hasOwn(descriptor, 'value');
-    });
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) return undefined;
+      copy[key] = descriptor.value;
+    }
+    return copy;
   } catch {
     // Normalize proxy/revocation failures through the caller's contract error.
-    return false;
+    return undefined;
   }
 }
 
 function exactInput(value, keys) {
-  if (!hasExactDataKeys(value, keys)) fail(ERROR_CODES.validation, 'Invalid input shape');
-  return Object.fromEntries(keys.map((key) => [key, Object.getOwnPropertyDescriptor(value, key).value]));
+  const copy = copyExactData(value, keys);
+  if (!copy) fail(ERROR_CODES.validation, 'Invalid input shape');
+  return copy;
 }
 
 function actorDetails(actor) {
-  if (!hasExactDataKeys(actor, ['tenant', 'role'])) fail(ERROR_CODES.auth, 'Invalid actor');
-  const tenant = Object.getOwnPropertyDescriptor(actor, 'tenant').value;
-  const role = Object.getOwnPropertyDescriptor(actor, 'role').value;
+  const copy = copyExactData(actor, ['tenant', 'role']);
+  if (!copy) fail(ERROR_CODES.auth, 'Invalid actor');
+  const {tenant, role} = copy;
   if (typeof tenant !== 'string' || tenant.length === 0 || (role !== 'admin' && role !== 'reader')) {
     fail(ERROR_CODES.auth, 'Invalid actor');
   }
