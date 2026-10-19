@@ -263,12 +263,12 @@ export class ReservationService {
     requireSafeInteger(input.page, 1);
     requireSafeInteger(input.pageSize, 1);
     if (input.pageSize > 50) throw failure('VALIDATION', 'Page size is too large');
-    const offset = (input.page - 1) * input.pageSize;
-    if (!Number.isSafeInteger(offset)) throw failure('VALIDATION', 'Pagination offset is unsafe');
 
     const {total} = this.#database.prepare(`
       SELECT COUNT(*) AS total FROM reservation_resources WHERE tenant = ?
     `).get(tenant);
+    const offset = (input.page - 1) * input.pageSize;
+    if (!Number.isSafeInteger(offset)) return {items: [], total};
     const rows = this.#database.prepare(`
       SELECT id, tenant, sku, quantity, amount_cents, status, version
       FROM reservation_resources
