@@ -8,20 +8,42 @@ function fail(code, message) {
 }
 
 function actorTenant(actor, mutate = false) {
-  if (actor === null || typeof actor !== 'object' || Array.isArray(actor) ||
-      typeof actor.tenant !== 'string' || actor.tenant.length === 0 ||
-      (actor.role !== 'admin' && actor.role !== 'reader')) {
+  if (actor === null || typeof actor !== 'object' || Array.isArray(actor)) {
     fail('AUTH', 'Invalid actor');
   }
-  if (mutate && actor.role !== 'admin') fail('FORBIDDEN', 'Read only actor');
-  return actor.tenant;
+  let tenant, role;
+  try {
+    tenant = actor.tenant;
+    role = actor.role;
+  } catch {
+    fail('AUTH', 'Invalid actor');
+  }
+  if (typeof tenant !== 'string' || tenant.length === 0 ||
+      (role !== 'admin' && role !== 'reader')) fail('AUTH', 'Invalid actor');
+  if (mutate && role !== 'admin') fail('FORBIDDEN', 'Read only actor');
+  return tenant;
 }
 
 function shape(value, keys) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value) ||
-      Reflect.ownKeys(value).length !== keys.length ||
-      !keys.every(key => Object.hasOwn(value, key) &&
-        Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), 'value'))) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    fail('VALIDATION', 'Invalid input shape');
+  }
+  try {
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.length !== keys.length ||
+        ownKeys.some(key => typeof key !== 'string' || !keys.includes(key))) {
+      fail('VALIDATION', 'Invalid input shape');
+    }
+    const result = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+        fail('VALIDATION', 'Invalid input shape');
+      }
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch {
     fail('VALIDATION', 'Invalid input shape');
   }
 }
@@ -98,87 +120,87 @@ export class ReservationService {
 
   seed(actor, input) {
     const tenant = actorTenant(actor, true);
-    shape(input, ['sku', 'available', 'unitCents']);
-    nonempty(input.sku);
-    integer(input.available, 0);
-    integer(input.unitCents, 0);
+    const request = shape(input, ['sku', 'available', 'unitCents']);
+    nonempty(request.sku);
+    integer(request.available, 0);
+    integer(request.unitCents, 0);
     return this.transaction(() => {
       const existing = this.db.prepare(`
         SELECT 1 FROM reservation_inventory WHERE tenant = ? AND sku = ?
-      `).get(tenant, input.sku);
+      `).get(tenant, request.sku);
       if (existing) fail('CONFLICT', 'SKU already exists');
       this.db.prepare(`
         INSERT INTO reservation_inventory (tenant, sku, available, unit_cents)
         VALUES (?, ?, ?, ?)
-      `).run(tenant, input.sku, input.available, input.unitCents);
+      `).run(tenant, request.sku, request.available, request.unitCents);
     });
   }
 
   reserve(actor, input) {
     const tenant = actorTenant(actor, true);
-    shape(input, ['key', 'sku', 'quantity']);
-    nonempty(input.key);
-    nonempty(input.sku);
-    integer(input.quantity, 1);
-    const canonical = JSON.stringify({ sku: input.sku, quantity: input.quantity });
+    const request = shape(input, ['key', 'sku', 'quantity']);
+    nonempty(request.key);
+    nonempty(request.sku);
+    integer(request.quantity, 1);
+    const canonical = JSON.stringify({ sku: request.sku, quantity: request.quantity });
     return this.transaction(() => {
-      const replayed = this.replay(tenant, 'reserve', input.key, canonical);
+      const replayed = this.replay(tenant, 'reserve', request.key, canonical);
       if (replayed) return replayed;
       const stock = this.db.prepare(`
         SELECT available, unit_cents FROM reservation_inventory
         WHERE tenant = ? AND sku = ?
-      `).get(tenant, input.sku);
+      `).get(tenant, request.sku);
       if (!stock) fail('NOT_FOUND', 'SKU not found');
-      if (stock.available < input.quantity) fail('CONFLICT', 'Insufficient inventory');
-      if (stock.unit_cents > Number.MAX_SAFE_INTEGER / input.quantity) {
+      if (stock.available < request.quantity) fail('CONFLICT', 'Insufficient inventory');
+      if (stock.unit_cents > Number.MAX_SAFE_INTEGER / request.quantity) {
         fail('VALIDATION', 'Amount exceeds safe integer');
       }
       const result = {
-        id: randomUUID(), tenant, sku: input.sku, quantity: input.quantity,
-        amountCents: input.quantity * stock.unit_cents,
+        id: randomUUID(), tenant, sku: request.sku, quantity: request.quantity,
+        amountCents: request.quantity * stock.unit_cents,
         status: 'reserved', version: 1,
       };
       this.db.prepare(`
         UPDATE reservation_inventory SET available = available - ?
         WHERE tenant = ? AND sku = ?
-      `).run(input.quantity, tenant, input.sku);
+      `).run(request.quantity, tenant, request.sku);
       this.db.prepare(`
         INSERT INTO reservation_resources
           (id, tenant, sku, quantity, amount_cents, status, version)
         VALUES (?, ?, ?, ?, ?, 'reserved', 1)
       `).run(result.id, tenant, result.sku, result.quantity, result.amountCents);
-      this.remember(tenant, 'reserve', input.key, canonical, result);
+      this.remember(tenant, 'reserve', request.key, canonical, result);
       return result;
     });
   }
 
   cancel(actor, input) {
     const tenant = actorTenant(actor, true);
-    shape(input, ['key', 'id', 'expectedVersion']);
-    nonempty(input.key);
-    nonempty(input.id);
-    integer(input.expectedVersion, 1);
-    const canonical = JSON.stringify({ id: input.id, expectedVersion: input.expectedVersion });
+    const request = shape(input, ['key', 'id', 'expectedVersion']);
+    nonempty(request.key);
+    nonempty(request.id);
+    integer(request.expectedVersion, 1);
+    const canonical = JSON.stringify({ id: request.id, expectedVersion: request.expectedVersion });
     return this.transaction(() => {
-      const replayed = this.replay(tenant, 'cancel', input.key, canonical);
+      const replayed = this.replay(tenant, 'cancel', request.key, canonical);
       if (replayed) return replayed;
       const row = this.db.prepare(`
         SELECT * FROM reservation_resources WHERE tenant = ? AND id = ?
-      `).get(tenant, input.id);
+      `).get(tenant, request.id);
       if (!row) fail('NOT_FOUND', 'Reservation not found');
-      if (row.version !== input.expectedVersion || row.status !== 'reserved') {
+      if (row.version !== request.expectedVersion || row.status !== 'reserved') {
         fail('CONFLICT', 'Reservation cannot be canceled');
       }
       this.db.prepare(`
         UPDATE reservation_resources SET status = 'canceled', version = version + 1
         WHERE tenant = ? AND id = ?
-      `).run(tenant, input.id);
+      `).run(tenant, request.id);
       this.db.prepare(`
         UPDATE reservation_inventory SET available = available + ?
         WHERE tenant = ? AND sku = ?
       `).run(row.quantity, tenant, row.sku);
       const result = { ...publicReservation(row), status: 'canceled', version: row.version + 1 };
-      this.remember(tenant, 'cancel', input.key, canonical, result);
+      this.remember(tenant, 'cancel', request.key, canonical, result);
       return result;
     });
   }
@@ -206,19 +228,19 @@ export class ReservationService {
 
   list(actor, input) {
     const tenant = actorTenant(actor);
-    shape(input, ['page', 'pageSize']);
-    integer(input.page, 1);
-    integer(input.pageSize, 1);
-    if (input.pageSize > 50) fail('VALIDATION', 'Page size too large');
+    const request = shape(input, ['page', 'pageSize']);
+    integer(request.page, 1);
+    integer(request.pageSize, 1);
+    if (request.pageSize > 50) fail('VALIDATION', 'Page size too large');
     const total = this.db.prepare(`
       SELECT COUNT(*) AS total FROM reservation_resources WHERE tenant = ?
     `).get(tenant).total;
-    const offset = (input.page - 1) * input.pageSize;
+    const offset = (request.page - 1) * request.pageSize;
     if (!Number.isSafeInteger(offset) || offset >= total) return { items: [], total };
     const rows = this.db.prepare(`
       SELECT * FROM reservation_resources WHERE tenant = ?
       ORDER BY sequence LIMIT ? OFFSET ?
-    `).all(tenant, input.pageSize, offset);
+    `).all(tenant, request.pageSize, offset);
     return { items: rows.map(publicReservation), total };
   }
 
