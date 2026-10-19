@@ -60,7 +60,12 @@ function publicReservation(row) {
     amountCents: row.amount_cents,
     status: row.status,
     version: row.version,
+    currency: 'JPY',
   };
+}
+
+function publicReplay(result) {
+  return {...result, currency: 'JPY'};
 }
 
 function publicInventory(row) {
@@ -134,7 +139,7 @@ export class ReservationService {
     if (row.canonical_input !== canonicalInput) {
       fail('CONFLICT', 'Idempotency key has different input');
     }
-    return JSON.parse(row.result);
+    return publicReplay(JSON.parse(row.result));
   }
 
   remember(tenant, operation, key, canonicalInput, result) {
@@ -187,7 +192,7 @@ export class ReservationService {
       const result = {
         id: randomUUID(), tenant, sku, quantity,
         amountCents: quantity * inventory.unit_cents,
-        status: 'reserved', version: 1,
+        status: 'reserved', version: 1, currency: 'JPY',
       };
       this.database.prepare(`
         UPDATE reservation_service_inventory SET available = available - ?
@@ -231,6 +236,7 @@ export class ReservationService {
       const result = {
         id: row.id, tenant: row.tenant, sku: row.sku, quantity: row.quantity,
         amountCents: row.amount_cents, status: 'canceled', version: row.version + 1,
+        currency: 'JPY',
       };
       this.remember(tenant, 'cancel', key, canonicalInput, result);
       return result;

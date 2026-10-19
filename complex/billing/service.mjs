@@ -126,14 +126,16 @@ export class BillingService {
     }
   }
 
-  replay(tenant, operation, key, canonical) {
+  replay(tenant, operation, key, canonical, legacyCanonical) {
     const row = this.db.prepare(`
       SELECT canonical_input, result
       FROM ${IDEMPOTENCY}
       WHERE tenant = ? AND operation = ? AND idempotency_key = ?
     `).get(tenant, operation, key);
     if (!row) return undefined;
-    if (row.canonical_input !== canonical) fail('CONFLICT', 'Idempotency key conflict');
+    if (row.canonical_input !== canonical && row.canonical_input !== legacyCanonical) {
+      fail('CONFLICT', 'Idempotency key conflict');
+    }
     return JSON.parse(row.result);
   }
 
@@ -152,7 +154,7 @@ export class BillingService {
     );
     validateKey(key);
     const eventFields = readExactFields(event, [
-      'id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version',
+      'id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency',
     ], 'VALIDATION', 'Invalid reservation event');
     if (!nonemptyString(eventFields.id)
         || !nonemptyString(eventFields.tenant)
@@ -160,7 +162,8 @@ export class BillingService {
         || !safeInteger(eventFields.quantity, 1)
         || !safeInteger(eventFields.amountCents, 0)
         || eventFields.status !== 'reserved'
-        || !safeInteger(eventFields.version, 1)) {
+        || !safeInteger(eventFields.version, 1)
+        || eventFields.currency !== 'JPY') {
       fail('VALIDATION', 'Invalid reservation event');
     }
     if (eventFields.tenant !== tenant) fail('FORBIDDEN', 'Event tenant mismatch');
@@ -174,10 +177,22 @@ export class BillingService {
         amountCents: eventFields.amountCents,
         status: eventFields.status,
         version: eventFields.version,
+        currency: eventFields.currency,
+      },
+    });
+    const legacyCanonical = JSON.stringify({
+      event: {
+        id: eventFields.id,
+        tenant: eventFields.tenant,
+        sku: eventFields.sku,
+        quantity: eventFields.quantity,
+        amountCents: eventFields.amountCents,
+        status: eventFields.status,
+        version: eventFields.version,
       },
     });
     return this.transaction(() => {
-      const replay = this.replay(tenant, 'issue', key, canonical);
+      const replay = this.replay(tenant, 'issue', key, canonical, legacyCanonical);
       if (replay !== undefined) return replay;
       const duplicate = this.db.prepare(`
         SELECT 1 FROM ${INVOICES} WHERE tenant = ? AND reservation_id = ?
