@@ -1,7 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency'];
 
 function fail(code, message) {
   const error = new Error(message || code);
@@ -129,6 +129,7 @@ export class BillingService {
       amountCents,
       status,
       version,
+      currency,
     } = event;
 
     if (!isNonEmptyString(reservationId)) fail('VALIDATION', 'invalid event id');
@@ -138,6 +139,10 @@ export class BillingService {
     if (!isSafeInt(amountCents) || amountCents < 0) fail('VALIDATION', 'invalid amountCents');
     if (status !== 'reserved') fail('VALIDATION', 'invalid status');
     if (!isSafeInt(version) || version < 1) fail('VALIDATION', 'invalid version');
+    // Currency validation happens here, before the idempotency-key transaction below,
+    // so a rejected issue() call never records or burns the idempotency key: a later
+    // retry with the same key and a valid currency can still succeed.
+    if (currency !== 'JPY') fail('VALIDATION', 'invalid currency');
 
     if (eventTenant !== writer.tenant) fail('FORBIDDEN', 'event tenant mismatch');
 
