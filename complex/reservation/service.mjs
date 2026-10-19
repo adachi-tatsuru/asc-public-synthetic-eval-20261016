@@ -8,11 +8,12 @@ function fail(code, message) {
 }
 
 function actorTenant(actor, mutate = false) {
-  if (actor === null || typeof actor !== 'object' || Array.isArray(actor)) {
+  if (actor === null || typeof actor !== 'object') {
     fail('AUTH', 'Invalid actor');
   }
   let tenant, role;
   try {
+    if (Array.isArray(actor)) fail('AUTH', 'Invalid actor');
     tenant = actor.tenant;
     role = actor.role;
   } catch {
@@ -25,10 +26,11 @@ function actorTenant(actor, mutate = false) {
 }
 
 function shape(value, keys) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+  if (value === null || typeof value !== 'object') {
     fail('VALIDATION', 'Invalid input shape');
   }
   try {
+    if (Array.isArray(value)) fail('VALIDATION', 'Invalid input shape');
     const ownKeys = Reflect.ownKeys(value);
     if (ownKeys.length !== keys.length ||
         ownKeys.some(key => typeof key !== 'string' || !keys.includes(key))) {

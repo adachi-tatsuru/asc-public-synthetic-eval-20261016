@@ -8,8 +8,9 @@ function failure(code) {
 }
 
 function snapshot(value, names) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw failure('VALIDATION');
+  if (value === null || typeof value !== 'object') throw failure('VALIDATION');
   try {
+    if (Array.isArray(value)) throw failure('VALIDATION');
     const keys = Reflect.ownKeys(value);
     if (keys.length !== names.length || keys.some(key => typeof key !== 'string' || !names.includes(key))) throw failure('VALIDATION');
     const result = {};
@@ -29,9 +30,10 @@ const nonempty = value => typeof value === 'string' && value.length > 0;
 const integer = (value, minimum) => Number.isSafeInteger(value) && value >= minimum;
 
 function actorSnapshot(actor, mutation = false) {
-  if (actor === null || typeof actor !== 'object' || Array.isArray(actor)) throw failure('AUTH');
+  if (actor === null || typeof actor !== 'object') throw failure('AUTH');
   let tenant, role;
   try {
+    if (Array.isArray(actor)) throw failure('AUTH');
     tenant = actor.tenant;
     role = actor.role;
   } catch {
