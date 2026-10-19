@@ -157,7 +157,9 @@ export class BillingService {
 
       const existing = this.#findIdempotent(writer.tenant, 'issue', key);
       if (existing) {
-        if (existing.input_json !== canonicalInput) fail('CONFLICT', 'idempotency key reused with different input');
+        const existingInput = JSON.parse(existing.input_json);
+        if (existingInput.currency === undefined) existingInput.currency = 'JPY';
+        if (JSON.stringify(existingInput) !== canonicalInput) fail('CONFLICT', 'idempotency key reused with different input');
         return Object.freeze(JSON.parse(existing.result_json));
       }
 
