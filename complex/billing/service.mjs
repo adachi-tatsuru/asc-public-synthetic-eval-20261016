@@ -40,7 +40,7 @@ export class BillingService {
       CREATE TABLE IF NOT EXISTS billing_idempotency(tenant TEXT NOT NULL,operation TEXT NOT NULL,key TEXT NOT NULL,
         input TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(tenant,operation,key));`);
   }
-  close() { this.#db.close(); }
+  close() { if(this.#db.isOpen)this.#db.close(); }
   #transaction(fn) {
     this.#db.exec('BEGIN IMMEDIATE');
     try{const result=fn();this.#db.exec('COMMIT');return result;}
@@ -60,12 +60,14 @@ export class BillingService {
   issue(actor, input) {
     actor=actorOf(actor);
     const {key,event:raw}=fields(input,['key','event']);check(text(key),'Invalid key');
-    const event=fields(raw,['id','tenant','sku','quantity','amountCents','status','version']);
+    const {currency,...event}=fields(raw,['id','tenant','sku','quantity','amountCents','status','version','currency']);
+    check(currency==='JPY','Unsupported currency');
     check(text(event.id)&&text(event.tenant)&&text(event.sku),'Invalid event identifiers');
     check(int(event.quantity,1)&&int(event.amountCents,0)&&int(event.version,1),'Invalid event numbers');
     check(event.status==='reserved','Event must be reserved');
     writer(actor);
     if(event.tenant!==actor.tenant)fail('FORBIDDEN','Event tenant mismatch');
+    // currency is the constant 'JPY' and is excluded so the canonical input stays byte-identical to pre-revision records.
     return this.#idempotent(actor,'issue',key,{event},()=>{
       if(this.#db.prepare('SELECT 1 FROM billing_invoices WHERE tenant=? AND reservation_id=?').get(actor.tenant,event.id))fail('CONFLICT','Reservation already invoiced');
       const invoice={id:randomUUID(),tenant:actor.tenant,reservationId:event.id,amountCents:event.amountCents,status:'open',version:1};
