@@ -1,0 +1,10 @@
+body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #1b1b1b; }
+main { display: grid; gap: 2rem; }
+table { border-collapse: collapse; width: 100%; margin: .75rem 0; }
+th, td { border-bottom: 1px solid #ccc; padding: .35rem .5rem; text-align: left; }
+form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.pager { display: flex; gap: .75rem; align-items: center; }
+#message:empty { display: none; }
+#message { padding: .5rem .75rem; border-radius: 4px; background: #eef4ff; }
+#message.error { background: #fdecea; color: #7a1c12; }
+button[disabled] { opacity: .5; }
