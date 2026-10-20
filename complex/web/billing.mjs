@@ -15,7 +15,7 @@ function requireText(value, name) {
 }
 
 /**
- * Invoice routes. Error order for mutations: 401 (server) → 403 reader → 400 shape → 404 resolution → 409 state.
+ * Invoice routes. Error order for mutations: 401 (server) → 403 reader → 400 shape → idempotent replay → 404 resolution → 409 state.
  * POST /api/invoices resolves the reservation through the authenticated actor's reservation service;
  * the browser never supplies the billing event.
  */
@@ -35,6 +35,10 @@ export function billingRoutes({ reservations, billing }) {
         const { key, reservationId } = requireBody(body, ['key', 'reservationId']);
         requireText(key, 'key');
         requireText(reservationId, 'reservationId');
+        // Replay a previously successful request before resolving current reservation state, so a
+        // retry still returns the original invoice after the reservation was later canceled.
+        const replayed = billing.replayIssue(actor, { key, reservationId });
+        if (replayed) return { status: 201, body: replayed };
         const event = reservations.get(actor, reservationId);
         if (event && typeof event === 'object' && event.status !== 'reserved') {
           throw new HttpError('CONFLICT', `Reservation ${reservationId} is ${event.status}; only reserved reservations can be invoiced`);
