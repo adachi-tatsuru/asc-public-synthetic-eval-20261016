@@ -1,7 +1,9 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+// Currency revision: the reservation event now carries `currency`, which must be exactly 'JPY'.
+const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version', 'currency'];
+const SUPPORTED_CURRENCY = 'JPY';
 
 function fail(code, message) {
   const error = new Error(message || code);
@@ -129,6 +131,7 @@ export class BillingService {
       amountCents,
       status,
       version,
+      currency,
     } = event;
 
     if (!isNonEmptyString(reservationId)) fail('VALIDATION', 'invalid event id');
@@ -138,10 +141,14 @@ export class BillingService {
     if (!isSafeInt(amountCents) || amountCents < 0) fail('VALIDATION', 'invalid amountCents');
     if (status !== 'reserved') fail('VALIDATION', 'invalid status');
     if (!isSafeInt(version) || version < 1) fail('VALIDATION', 'invalid version');
+    if (currency !== SUPPORTED_CURRENCY) fail('VALIDATION', 'invalid currency');
 
     if (eventTenant !== writer.tenant) fail('FORBIDDEN', 'event tenant mismatch');
 
     return this.#runInTransaction(() => {
+      // Canonical input intentionally omits `currency`: it is validated to be the single
+      // constant 'JPY', so excluding it loses no information and keeps idempotency records
+      // stored before the currency revision byte-compatible (legacy keys replay unchanged).
       const canonicalInput = JSON.stringify({
         id: reservationId,
         tenant: eventTenant,
