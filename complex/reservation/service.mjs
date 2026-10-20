@@ -56,6 +56,28 @@ function requireAdmin(actor) {
   return a;
 }
 
+// Revised contract: every public reservation resource carries this constant
+// currency. It is added only at the public boundary; stored rows and stored
+// idempotency results (including those written before the revision) keep
+// their original shape so IDs, quantities, amounts and versions never change.
+const CURRENCY = 'JPY';
+
+// Builds a fresh frozen public resource from a stored record (either a
+// camelCase idempotency result or a normalized row object). Only the known
+// fields are copied, so nothing mutable is shared and no stray keys leak.
+function publicResource(rec) {
+  return Object.freeze({
+    id: rec.id,
+    tenant: rec.tenant,
+    sku: rec.sku,
+    quantity: rec.quantity,
+    amountCents: rec.amountCents,
+    status: rec.status,
+    version: rec.version,
+    currency: CURRENCY,
+  });
+}
+
 function canonicalEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -126,7 +148,7 @@ export class ReservationService {
   }
 
   #toPublic(row) {
-    return Object.freeze({
+    return publicResource({
       id: row.id,
       tenant: row.tenant,
       sku: row.sku,
@@ -170,7 +192,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return publicResource(existing.result);
       }
       const inv = this.#db
         .prepare('SELECT available, unit_cents FROM reservation_inventory WHERE tenant = ? AND sku = ?')
@@ -188,7 +210,7 @@ export class ReservationService {
         .run(quantity, a.tenant, sku);
       const result = { id, tenant: a.tenant, sku, quantity, amountCents, status: 'reserved', version: 1 };
       this.#saveIdempotent(a.tenant, 'reserve', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return publicResource(result);
     });
   }
 
@@ -206,7 +228,7 @@ export class ReservationService {
         if (!canonicalEqual(existing.input, canonicalInput)) {
           throw makeError('CONFLICT', 'idempotency key reused with different input');
         }
-        return Object.freeze({ ...existing.result });
+        return publicResource(existing.result);
       }
       const row = this.#db
         .prepare('SELECT * FROM reservation_resources WHERE tenant = ? AND id = ?')
@@ -232,7 +254,7 @@ export class ReservationService {
         version: newVersion,
       };
       this.#saveIdempotent(a.tenant, 'cancel', key, canonicalInput, result);
-      return Object.freeze({ ...result });
+      return publicResource(result);
     });
   }
 
