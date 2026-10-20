@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reservations and invoices</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <header>
+    <h1>Reservations and invoices</h1>
+    <p id="session" aria-live="polite">Checking session…</p>
+  </header>
+  <p id="message" role="status" aria-live="polite"></p>
+  <main>
+    <section aria-labelledby="reservations-heading">
+      <h2 id="reservations-heading">Reservations</h2>
+      <form id="reservation-form" novalidate>
+        <label for="sku">SKU</label>
+        <input id="sku" name="sku" autocomplete="off" required>
+        <label for="quantity">Quantity</label>
+        <input id="quantity" name="quantity" inputmode="numeric" autocomplete="off" required>
+        <button id="reserve" type="submit">Reserve</button>
+      </form>
+      <table>
+        <thead><tr><th scope="col">ID</th><th scope="col">SKU</th><th scope="col">Quantity</th><th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Version</th><th scope="col">Actions</th></tr></thead>
+        <tbody id="reservations"></tbody>
+      </table>
+      <nav class="pager" aria-label="Reservation pages">
+        <button id="reservation-prev" type="button">Previous</button>
+        <span id="reservation-pagination" aria-live="polite"></span>
+        <button id="reservation-next" type="button">Next</button>
+      </nav>
+    </section>
+    <section aria-labelledby="invoices-heading">
+      <h2 id="invoices-heading">Invoices</h2>
+      <table>
+        <thead><tr><th scope="col">ID</th><th scope="col">Reservation</th><th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Version</th><th scope="col">Actions</th></tr></thead>
+        <tbody id="invoices"></tbody>
+      </table>
+      <nav class="pager" aria-label="Invoice pages">
+        <button id="invoice-prev" type="button">Previous</button>
+        <span id="invoice-pagination" aria-live="polite"></span>
+        <button id="invoice-next" type="button">Next</button>
+      </nav>
+    </section>
+  </main>
+</body>
+</html>
