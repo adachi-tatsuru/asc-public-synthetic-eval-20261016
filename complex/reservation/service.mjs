@@ -26,7 +26,11 @@ function actorOf(actor){
  return a;
 }
 const admin=a=>{if(a.role!=='admin')fail('FORBIDDEN','Reader cannot mutate');};
-const pub=r=>Object.freeze({id:r.id,tenant:r.tenant,sku:r.sku,quantity:r.quantity,amountCents:r.amountCents,status:r.status,version:r.version});
+// Constant currency (Issue 9006 revision). Added only at the public boundary so rows and
+// idempotency records written before the revision (stored without currency) stay readable/replayable.
+const CURRENCY='JPY';
+const core=r=>({id:r.id,tenant:r.tenant,sku:r.sku,quantity:r.quantity,amountCents:r.amountCents,status:r.status,version:r.version});
+const pub=r=>Object.freeze({...core(r),currency:CURRENCY});
 const row=r=>r&&pub({...r,amountCents:r.amount_cents});
 const SELECT='SELECT id,tenant,sku,quantity,amount_cents,status,version FROM reservation_reservations';
 export class ReservationService {
@@ -50,7 +54,7 @@ export class ReservationService {
    const prior=this.#db.prepare('SELECT input,result FROM reservation_idempotency WHERE tenant=? AND operation=? AND key=?').get(a.tenant,op,key);
    if(prior){if(prior.input!==canonical)fail('CONFLICT','Idempotency key reused with different input');return pub(JSON.parse(prior.result));}
    const result=effect();
-   this.#db.prepare('INSERT INTO reservation_idempotency(tenant,operation,key,input,result) VALUES(?,?,?,?,?)').run(a.tenant,op,key,canonical,JSON.stringify(result));
+   this.#db.prepare('INSERT INTO reservation_idempotency(tenant,operation,key,input,result) VALUES(?,?,?,?,?)').run(a.tenant,op,key,canonical,JSON.stringify(core(result)));
    return result;
   });
  }
