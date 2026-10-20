@@ -13,8 +13,9 @@ jobs:
         with:
           node-version: '24'
       - run: |
-          node complex/oracle/reservation.mjs complex
-          node complex/oracle/billing.mjs complex
+          node complex/oracle/reservation.mjs complex revised
+          node complex/oracle/billing.mjs complex revised
           node complex/oracle/integration.mjs complex
           node complex/oracle/unknown-keys.mjs complex
-          node complex/oracle/accessors.mjs complex
+          node complex/oracle/accessors.mjs complex revised
+          node complex/oracle/revision.mjs complex/previous complex
