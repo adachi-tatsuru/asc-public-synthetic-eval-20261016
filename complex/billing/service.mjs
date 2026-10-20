@@ -178,6 +178,27 @@ export class BillingService {
     });
   }
 
+  /**
+   * HTTP-layer replay lookup for issue requests identified by {key, reservationId}. Requires admin.
+   * Returns the original invoice if this tenant's issue key was used for the same reservation,
+   * throws CONFLICT if it was used for a different reservation, or returns undefined if unused.
+   * Lets a retried request replay even after the reservation later changed (e.g. was canceled).
+   */
+  replayIssue(actor, input) {
+    const who = readActor(actor);
+    requireAdmin(who);
+    const { key, reservationId } = snapshot(input, ['key', 'reservationId'], 'replayIssue input');
+    requireKey(key);
+    if (!isNonEmptyString(reservationId)) throw fail('VALIDATION', 'reservationId must be a nonempty string');
+    const record = this.#db.prepare('SELECT result FROM billing_idempotency WHERE tenant = ? AND operation = ? AND key = ?').get(who.tenant, 'issue', key);
+    if (!record) return undefined;
+    const result = JSON.parse(record.result);
+    if (result.reservationId !== reservationId) {
+      throw fail('CONFLICT', `Idempotency key ${key} was already used to invoice a different reservation; use a new key`);
+    }
+    return result;
+  }
+
   pay(actor, input) { return this.#transition('pay', actor, input); }
 
   refund(actor, input) { return this.#transition('refund', actor, input); }

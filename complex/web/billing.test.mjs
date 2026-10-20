@@ -192,13 +192,29 @@ test('list paginates by creation order, defaults to page 1 of size 2 and rejects
   state.third = third;
 });
 
-test('issuing a canceled reservation is a conflict and cancel leaves invoices unchanged', async () => {
+test('issuing a canceled reservation is a conflict, but a prior issue replays after cancel', async () => {
   const r4 = await call('POST', '/api/reservations', { body: { key: 'r4', sku: 'seat', quantity: 1 }, status: 201 });
+  const r5 = await call('POST', '/api/reservations', { body: { key: 'r5', sku: 'seat', quantity: 1 }, status: 201 });
+  const inv4 = await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: r4.id }, status: 201 });
   await call('POST', `/api/reservations/${encodeURIComponent(r4.id)}/cancel`, { body: { key: 'cancel-r4', expectedVersion: 1 } });
-  await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: r4.id }, status: 409 });
+  // retry of the successful request replays the original invoice despite the later cancellation
+  assert.deepEqual(await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: r4.id }, status: 201 }), inv4);
+  // replay still requires authority; readers and other tenants learn nothing
+  await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: r4.id }, session: 'alpha-reader', status: 403 });
+  await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: r4.id }, session: 'beta-admin', status: 404 });
+  // a genuinely new request for the canceled reservation is a conflict
+  await call('POST', '/api/invoices', { body: { key: 'issue-4-new', reservationId: r4.id }, status: 409 });
+  // reusing the key for a different reservation is a conflict and does not invoice r5
+  await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: r5.id }, status: 409 });
+  // a canceled reservation that never had an invoice cannot be invoiced
+  await call('POST', `/api/reservations/${encodeURIComponent(r5.id)}/cancel`, { body: { key: 'cancel-r5', expectedVersion: 1 } });
+  await call('POST', '/api/invoices', { body: { key: 'issue-5', reservationId: r5.id }, status: 409 });
+  // cancellation leaves existing invoices unchanged
   await call('POST', `/api/reservations/${encodeURIComponent(state.r3.id)}/cancel`, { body: { key: 'cancel-r3', expectedVersion: 1 } });
   assert.deepEqual(await call('GET', invoicePath(state.third.id)), state.third);
-  assert.equal(await invoiceTotal(), 3);
+  assert.deepEqual(await call('GET', invoicePath(inv4.id)), inv4);
+  assert.equal(await invoiceTotal(), 4);
+  state.r4 = r4; state.r5 = r5; state.inv4 = inv4;
 });
 
 test('unknown routes and methods never invoke another operation', async () => {
@@ -225,7 +241,11 @@ test('invoices, idempotency records and replays survive a server restart', async
   assert.deepEqual(await call('POST', `${invoicePath(invoice.id)}/pay`, { body: { key: 'p', expectedVersion: 1 } }), paid);
   assert.deepEqual(await call('POST', `${invoicePath(invoice.id)}/refund`, { body: { key: 'refund', expectedVersion: 2 } }), refunded);
   await call('POST', `${invoicePath(invoice.id)}/refund`, { body: { key: 'refund', expectedVersion: 2 }, session: 'alpha-reader', status: 403 });
+  // replay-after-cancel survives restart; new keys and key reuse still conflict
+  assert.deepEqual(await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: state.r4.id }, status: 201 }), state.inv4);
+  await call('POST', '/api/invoices', { body: { key: 'issue-4-restart', reservationId: state.r4.id }, status: 409 });
+  await call('POST', '/api/invoices', { body: { key: 'issue-4', reservationId: state.r5.id }, status: 409 });
   const page = await call('GET', '/api/invoices?page=1&pageSize=50');
-  assert.equal(page.total, 3);
-  assert.deepEqual(page.items.map(i => i.status), ['refunded', 'open', 'open']);
+  assert.equal(page.total, 4);
+  assert.deepEqual(page.items.map(i => i.status), ['refunded', 'open', 'open', 'open']);
 });
