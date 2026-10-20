@@ -71,11 +71,11 @@ function splitPath(pathname) {
 }
 
 async function handleApi(req, res, url) {
+  const actor = actorForSession(req.headers['x-fixture-session']);
   const segments = splitPath(url.pathname);
   const found = matchRoute(routes, req.method, segments);
   if (!found) return send(res, 404, { code: 'NOT_FOUND', message: `No API route ${req.method} ${url.pathname}` });
   if (found.methodNotAllowed) return send(res, 405, { code: 'METHOD', message: `Method ${req.method} is not allowed for ${url.pathname}` });
-  const actor = actorForSession(req.headers['x-fixture-session']);
   const body = req.method === 'POST' ? await readBody(req) : undefined;
   const result = found.route.handle({ actor, params: found.params, query: url.searchParams, body });
   send(res, result.status, result.body);
