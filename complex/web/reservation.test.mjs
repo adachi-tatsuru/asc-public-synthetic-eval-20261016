@@ -110,6 +110,19 @@ test('readers may read but every mutation is 403 without state change', withServ
   assert.equal(await available(s, 'seat', 'alpha-reader'), 8);
   await expectStatus(s.request('GET', '/api/inventory?sku=reader-sku', { session: 'alpha-reader' }), 404, 'NOT_FOUND');
   assert.equal((await expectStatus(s.request('GET', idPathOf(r), { session: 'alpha-reader' }), 200)).status, 'reserved');
+  // Role is checked before body shape: invalid reader bodies are still 403, never 400.
+  const cancelPath = `${idPathOf(r)}/cancel`;
+  for (const [route, raw] of [['/api/reservations', '{}'], ['/api/reservations', '{"key":"r1","sku":"seat","quantity":1,"extra":true}'],
+    ['/api/reservations', '{"key":"r1","sku":"seat","quantity":"1"}'], ['/api/reservations', 'null'], ['/api/reservations', '[]'],
+    ['/api/reservations/seed', '{}'], ['/api/reservations/seed', '{"sku":"reader-sku","available":1,"unitCents":1,"tenant":"alpha"}'],
+    [cancelPath, '{}'], [cancelPath, '{"key":"c","expectedVersion":"1"}'], [cancelPath, '{"key":"c","expectedVersion":1,"extra":1}']]) {
+    const body = await expectStatus(s.request('POST', route, { raw, session: 'alpha-reader' }), 403, 'FORBIDDEN');
+    assert.match(body.message, /admin/);
+  }
+  assert.equal(await available(s, 'seat', 'alpha-reader'), 8);
+  assert.deepEqual(await expectStatus(s.request('GET', idPathOf(r), { session: 'alpha-reader' }), 200), r);
+  assert.equal((await listAll(s, 'alpha-reader')).total, 1);
+  await expectStatus(s.request('GET', '/api/inventory?sku=reader-sku', { session: 'alpha-reader' }), 404, 'NOT_FOUND');
   // The reader's rejected key was not consumed.
   assert.equal((await expectStatus(reserve(s, { key: 'r1', sku: 'seat', quantity: 1 }), 201)).quantity, 1);
 }));

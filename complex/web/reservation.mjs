@@ -18,11 +18,17 @@ function requireSku(query) {
   return sku;
 }
 
+/** Reject readers before inspecting the body so authority errors never depend on input shape. */
+function requireAdmin(actor, action) {
+  if (actor.role !== 'admin') throw new HttpError('FORBIDDEN', `Readers may not ${action}; use an admin session (alpha-admin or beta-admin)`);
+}
+
 export function reservationRoutes({ reservations }) {
   return [
     {
       method: 'POST', path: ['api', 'reservations', 'seed'],
       handle: ({ actor, query, body }) => {
+        requireAdmin(actor, 'seed inventory');
         requireNoQuery(query);
         const b = requireBody(body, ['sku', 'available', 'unitCents']);
         reservations.seed(actor, { sku: b.sku, available: b.available, unitCents: b.unitCents });
@@ -32,6 +38,7 @@ export function reservationRoutes({ reservations }) {
     {
       method: 'POST', path: ['api', 'reservations'],
       handle: ({ actor, query, body }) => {
+        requireAdmin(actor, 'create reservations');
         requireNoQuery(query);
         const b = requireBody(body, ['key', 'sku', 'quantity']);
         return { status: 201, body: reservations.reserve(actor, { key: b.key, sku: b.sku, quantity: b.quantity }) };
@@ -51,6 +58,7 @@ export function reservationRoutes({ reservations }) {
     {
       method: 'POST', path: ['api', 'reservations', ':id', 'cancel'],
       handle: ({ actor, params, query, body }) => {
+        requireAdmin(actor, 'cancel reservations');
         requireNoQuery(query);
         const b = requireBody(body, ['key', 'expectedVersion']);
         return { status: 200, body: reservations.cancel(actor, { key: b.key, id: params.id, expectedVersion: b.expectedVersion }) };
