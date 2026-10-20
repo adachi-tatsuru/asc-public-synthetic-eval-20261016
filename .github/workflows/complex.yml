@@ -18,3 +18,13 @@ jobs:
           node complex/oracle/integration.mjs complex
           node complex/oracle/unknown-keys.mjs complex
           node complex/oracle/accessors.mjs complex
+          node complex/oracle/http.mjs complex
+      - name: Install pinned browser driver
+        run: |
+          sudo mkdir -p /tools
+          sudo chown "$USER" /tools
+          npm install --prefix /tools --ignore-scripts --no-audit --no-fund playwright-core@1.56.1
+          sudo mkdir -p /work
+          sudo chown "$USER" /work
+      - name: Visible journey
+        run: node complex/oracle/browser.mjs complex
