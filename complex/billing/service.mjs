@@ -1,7 +1,9 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 
-const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'status', 'version'];
+const EVENT_KEYS = ['id', 'tenant', 'sku', 'quantity', 'amountCents', 'currency', 'status', 'version'];
+// Contract revision: the only supported event currency. No conversion is performed.
+const SUPPORTED_CURRENCY = 'JPY';
 
 function fail(code, message) {
   const error = new Error(message || code);
@@ -127,6 +129,7 @@ export class BillingService {
       sku,
       quantity,
       amountCents,
+      currency,
       status,
       version,
     } = event;
@@ -136,6 +139,7 @@ export class BillingService {
     if (!isNonEmptyString(sku)) fail('VALIDATION', 'invalid event sku');
     if (!isSafeInt(quantity) || quantity <= 0) fail('VALIDATION', 'invalid quantity');
     if (!isSafeInt(amountCents) || amountCents < 0) fail('VALIDATION', 'invalid amountCents');
+    if (currency !== SUPPORTED_CURRENCY) fail('VALIDATION', 'invalid currency');
     if (status !== 'reserved') fail('VALIDATION', 'invalid status');
     if (!isSafeInt(version) || version < 1) fail('VALIDATION', 'invalid version');
 
@@ -148,13 +152,28 @@ export class BillingService {
         sku,
         quantity,
         amountCents,
+        currency,
+        status,
+        version,
+      });
+      // Records persisted before the currency revision stored the event without
+      // a currency; all such events were implicitly JPY, so they are equivalent
+      // to the revised input carrying currency 'JPY'.
+      const legacyCanonicalInput = JSON.stringify({
+        id: reservationId,
+        tenant: eventTenant,
+        sku,
+        quantity,
+        amountCents,
         status,
         version,
       });
 
       const existing = this.#findIdempotent(writer.tenant, 'issue', key);
       if (existing) {
-        if (existing.input_json !== canonicalInput) fail('CONFLICT', 'idempotency key reused with different input');
+        if (existing.input_json !== canonicalInput && existing.input_json !== legacyCanonicalInput) {
+          fail('CONFLICT', 'idempotency key reused with different input');
+        }
         return Object.freeze(JSON.parse(existing.result_json));
       }
 
