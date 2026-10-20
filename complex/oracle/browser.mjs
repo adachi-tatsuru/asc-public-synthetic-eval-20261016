@@ -1,8 +1,9 @@
-/** Run inside the existing network-isolated browser environment (/tools, /work). */
-import {chromium} from '/tools/node_modules/playwright-core/index.mjs';
+/* Run only inside an enclosing evaluation sandbox. Explicit installed driver, no downloads. */
+import fs from 'node:fs';import os from 'node:os';import {pathToFileURL} from 'node:url';
+const {chromium}=await import(pathToFileURL(process.argv[3]??'/tools/node_modules/playwright-core/index.mjs'));
 import {spawn} from 'node:child_process';import readline from 'node:readline';import {once} from 'node:events';import assert from 'node:assert/strict';import path from 'node:path';
-const root=path.resolve(process.argv[2]);
-const server=spawn(process.execPath,[path.join(root,'web/server.mjs')],{env:{...process.env,PORT:'0',DATA_FILE:'/work/system-browser.sqlite'},stdio:['ignore','pipe','inherit']});
+const root=path.resolve(process.argv[2]),temp=fs.mkdtempSync(path.join(os.tmpdir(),'asc-system-browser-'));
+const server=spawn(process.execPath,[path.join(root,'web/server.mjs')],{env:{...process.env,PORT:'0',DATA_FILE:path.join(temp,'state.sqlite')},stdio:['ignore','pipe','inherit']});
 let browser;
 try{
  const lines=readline.createInterface({input:server.stdout});
@@ -25,7 +26,7 @@ try{
  await row.getByRole('button',{name:'Cancel',exact:true}).click();await contains('#reservations','canceled');
  await page.reload();await contains('#invoices','refunded');await page.locator('#reservation-next').click();await contains('#reservations','canceled');
  // Invalid SKU is a server rejection; fields must remain correctable.
- await page.locator('#sku').fill('missing');await page.locator('#quantity').fill('1');const rejected=page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/reservations');await page.locator('#reserve').click();assert.equal((await rejected).status(),404);await page.waitForFunction(()=>Boolean(globalThis.document.querySelector('#message')?.textContent.trim()));assert.equal(await page.locator('#sku').inputValue(),'missing');
+ await page.locator('#sku').fill('missing');await page.locator('#quantity').fill('1');const rejected=page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/reservations');await page.locator('#reserve').click();const failed=await rejected;assert.equal(failed.status(),404);await contains('#message',(await failed.json()).message);assert.equal(await page.locator('#sku').inputValue(),'missing');
  const inventory=await context.request.get(origin+'/api/inventory?sku=seat');assert.equal((await inventory.json()).available,8);
  console.log('Browser reservation → invoice → pay → refund → cancel → reload journey passed');
-}finally{await browser?.close();if(server.exitCode===null&&server.signalCode===null){const ended=once(server,'exit');server.kill('SIGTERM');await ended;}}
+}finally{await browser?.close();if(server.exitCode===null&&server.signalCode===null){const ended=once(server,'exit');server.kill('SIGTERM');await ended;}fs.rmSync(temp,{recursive:true,force:true});}
